@@ -1,6 +1,8 @@
 import json
 import os
 
+DB경로 = os.path.join(os.path.dirname(__file__), "환자DB.json")
+
 def 혈압판정(수축기, 이완기):
     if 수축기 >= 180 or 이완기 >= 120:
         return "고혈압 위기"
@@ -22,15 +24,15 @@ def 환자브리핑(환자):
     print("")
 
 def 저장하기(환자목록):
-    파일 = open("환자DB.json", "w")
+    파일 = open(DB경로, "w")
     json.dump(환자목록, 파일, ensure_ascii=False, indent=2)
     파일.close()
     print("-> 저장완료!")
 
 def 불러오기():
     try:
-        if os.path.exists("환자DB.json"):
-            파일 = open("환자DB.json", "r")
+        if os.path.exists(DB경로):
+            파일 = open(DB경로, "r")
             환자목록 = json.load(파일)
             파일.close()
             print(f"-> 기존 데이터 {len(환자목록)}명 불러옴!")
