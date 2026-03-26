@@ -13,17 +13,85 @@ def DB연결():
     conn = sqlite3.connect(DB경로)
     # Row를 dict처럼 쓸 수 있게 설정 (환자["이름"] 형태로 접근 가능)
     conn.row_factory = sqlite3.Row
-    # 테이블이 없으면 새로 만든다 (이미 있으면 무시)
+    # 외래키 제약조건 활성화 (SQLite는 기본적으로 꺼져 있음)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    # ---- 1. 환자 테이블 ----
     conn.execute("""
         CREATE TABLE IF NOT EXISTS 환자 (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER PRIMARY KEY AUTOINCREMENT,
             이름 TEXT,
-            나이 INTEGER,
-            진단 TEXT,
-            수축기 INTEGER,
-            이완기 INTEGER
+            생년월일 TEXT,
+            성별 TEXT,
+            가족력 TEXT,
+            약부작용이력 TEXT
         )
     """)
+
+    # ---- 2. 방문 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 방문 (
+            방문id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문일 TEXT,
+            수축기 INTEGER,
+            이완기 INTEGER,
+            심박수 INTEGER,
+            키 REAL,
+            몸무게 REAL,
+            BMI REAL,
+            흡연 TEXT,
+            음주 TEXT,
+            운동 TEXT,
+            free_text TEXT,
+            처방요약 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id)
+        )
+    """)
+
+    # ---- 3. 진단 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 진단 (
+            진단id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문id INTEGER,
+            진단명 TEXT,
+            상태 TEXT CHECK(상태 IN ('활성', '관해', '종결')),
+            비고 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
+            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+        )
+    """)
+
+    # ---- 4. 검사결과 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 검사결과 (
+            검사id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문id INTEGER,
+            검사항목 TEXT,
+            결과값 TEXT,
+            단위 TEXT,
+            참고범위 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
+            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+        )
+    """)
+
+    # ---- 5. 추적계획 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 추적계획 (
+            추적id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문id INTEGER,
+            예정일 TEXT,
+            내용 TEXT,
+            완료여부 INTEGER DEFAULT 0,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
+            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+        )
+    """)
+
     conn.commit()
     return conn
 
