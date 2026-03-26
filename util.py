@@ -63,22 +63,34 @@ def DB연결():
         )
     """)
 
-    # ---- 4. 검사결과 테이블 ----
+    # ---- 4. 검사결과 테이블 (혈액검사용) ----
     conn.execute("""
         CREATE TABLE IF NOT EXISTS 검사결과 (
             검사id INTEGER PRIMARY KEY AUTOINCREMENT,
             환자id INTEGER,
-            방문id INTEGER,
+            검사시행일 TEXT,
             검사항목 TEXT,
             결과값 TEXT,
             단위 TEXT,
             참고범위 TEXT,
-            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
-            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id)
         )
     """)
 
-    # ---- 5. 추적계획 테이블 ----
+    # ---- 5. 영상검사 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 영상검사 (
+            영상id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            검사시행일 TEXT,
+            검사종류 TEXT,
+            결과요약 TEXT,
+            주요수치 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id)
+        )
+    """)
+
+    # ---- 6. 추적계획 테이블 ----
     conn.execute("""
         CREATE TABLE IF NOT EXISTS 추적계획 (
             추적id INTEGER PRIMARY KEY AUTOINCREMENT,
