@@ -422,6 +422,25 @@ def 진단수정_단일(진단id, 수정할항목, 새값):
         conn.close()
 
 
+def 진단수정_선택(진단id_리스트, 수정할항목, 새값):
+    """선택한 진단id들만 수정한다."""
+    허용항목 = ["진단명", "상태", "비고"]
+    if 수정할항목 not in 허용항목:
+        print(f" 수정 가능한 항목: {허용항목}")
+        return 0
+    conn = DB연결()
+    try:
+        with conn:
+            placeholders = ",".join("?" for _ in 진단id_리스트)
+            결과 = conn.execute(
+                f"UPDATE 진단 SET {수정할항목} = ? WHERE 진단id IN ({placeholders})",
+                [새값] + list(진단id_리스트)
+            )
+        return 결과.rowcount
+    finally:
+        conn.close()
+
+
 def 진단수정_전체(환자id, 기존진단명, 새진단명):
     """같은 진단명을 가진 해당 환자의 모든 진단 기록을 일괄 수정한다."""
     conn = DB연결()
@@ -517,6 +536,21 @@ def 진단삭제_단일(진단id):
         with conn:
             conn.execute("DELETE FROM 진단 WHERE 진단id = ?", (진단id,))
         return True
+    finally:
+        conn.close()
+
+
+def 진단삭제_선택(진단id_리스트):
+    """선택한 진단id들만 삭제한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            placeholders = ",".join("?" for _ in 진단id_리스트)
+            결과 = conn.execute(
+                f"DELETE FROM 진단 WHERE 진단id IN ({placeholders})",
+                list(진단id_리스트)
+            )
+        return 결과.rowcount
     finally:
         conn.close()
 
