@@ -109,7 +109,7 @@ def DB연결():
 
 
 # ============================================
-# 혈압 판정 함수 (변경 없음)
+# 혈압 판정 함수
 # ============================================
 def 혈압판정(수축기, 이완기):
     if 수축기 >= 180 or 이완기 >= 120:
@@ -125,19 +125,7 @@ def 혈압판정(수축기, 이완기):
 
 
 # ============================================
-# 환자 브리핑 출력 (변경 없음)
-# ============================================
-def 환자브리핑(환자):
-    print(f" 이름: {환자['이름']}")
-    print(f" 나이: {환자['나이']}")
-    print(f" 진단: {환자['진단']}")
-    print(f" 혈압: {환자['수축기']} / {환자['이완기']} mmHg")
-    print(f" 판정: {혈압판정(환자['수축기'], 환자['이완기'])}")
-    print("")
-
-
-# ============================================
-# 숫자 입력 유틸리티 (변경 없음)
+# 숫자 입력 유틸리티
 # ============================================
 def 숫자입력(질문, 최소, 최대):
     while True:
@@ -152,109 +140,226 @@ def 숫자입력(질문, 최소, 최대):
 
 
 # ============================================
-# SQLite CRUD 함수들
+# 1. 환자등록
 # ============================================
-
-def 환자등록(이름, 나이, 진단, 수축기, 이완기):
-    """새 환자를 DB에 등록하고, 등록된 환자의 id를 반환한다."""
+def 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력=""):
+    """새 환자를 DB에 등록하고, 환자id를 반환한다."""
     conn = DB연결()
     try:
-        with conn:  # with문: 성공하면 자동 commit, 실패하면 자동 rollback
+        with conn:
             cursor = conn.execute(
-                "INSERT INTO 환자 (이름, 나이, 진단, 수축기, 이완기) VALUES (?, ?, ?, ?, ?)",
-                (이름, 나이, 진단, 수축기, 이완기)
+                "INSERT INTO 환자 (이름, 생년월일, 성별, 가족력, 약부작용이력) VALUES (?, ?, ?, ?, ?)",
+                (이름, 생년월일, 성별, 가족력, 약부작용이력)
             )
             return cursor.lastrowid
     finally:
-        conn.close()  # DB 연결은 반드시 닫아줘야 한다
+        conn.close()
 
 
+# ============================================
+# 2. 환자검색
+# ============================================
+def 환자검색(이름):
+    """이름으로 환자를 검색하여 dict 리스트로 반환한다. (부분 검색 지원)"""
+    conn = DB연결()
+    try:
+        결과 = conn.execute(
+            "SELECT * FROM 환자 WHERE 이름 LIKE ?", (f"%{이름}%",)
+        ).fetchall()
+        return [dict(행) for 행 in 결과]
+    finally:
+        conn.close()
+
+
+# ============================================
+# 3. 환자목록가져오기
+# ============================================
 def 환자목록가져오기():
     """DB의 모든 환자를 dict 리스트로 반환한다."""
     conn = DB연결()
     try:
         결과 = conn.execute("SELECT * FROM 환자").fetchall()
-        # sqlite3.Row → dict로 변환 (환자브리핑 함수가 dict를 받으므로)
         return [dict(행) for 행 in 결과]
-    finally:
-        conn.close()
-
-
-def 환자검색(이름):
-    """이름으로 환자를 검색하여 dict 리스트로 반환한다."""
-    conn = DB연결()
-    try:
-        결과 = conn.execute(
-            "SELECT * FROM 환자 WHERE 이름 = ?", (이름,)
-        ).fetchall()
-        return [dict(행) for 행 in 결과]
-    finally:
-        conn.close()
-
-
-def 환자삭제(이름):
-    """이름으로 환자를 삭제하고, 삭제된 환자 수를 반환한다."""
-    conn = DB연결()
-    try:
-        with conn:
-            cursor = conn.execute(
-                "DELETE FROM 환자 WHERE 이름 = ?", (이름,)
-            )
-            return cursor.rowcount  # 삭제된 행 수 (0이면 해당 환자 없음)
-    finally:
-        conn.close()
-
-
-def 환자수정(이름, 수축기, 이완기):
-    """이름으로 환자를 찾아 혈압을 수정하고, 수정된 환자 수를 반환한다."""
-    conn = DB연결()
-    try:
-        with conn:
-            cursor = conn.execute(
-                "UPDATE 환자 SET 수축기 = ?, 이완기 = ? WHERE 이름 = ?",
-                (수축기, 이완기, 이름)
-            )
-            return cursor.rowcount  # 수정된 행 수 (0이면 해당 환자 없음)
     finally:
         conn.close()
 
 
 # ============================================
-# 통계 보기 (SQL 쿼리 기반으로 재작성)
+# 4. 방문기록추가
+# ============================================
+def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연="", 음주="", 운동="", free_text="", 처방요약=""):
+    """방문 기록을 추가하고, 방문id를 반환한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            cursor = conn.execute(
+                """INSERT INTO 방문 (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약)
+            )
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+# ============================================
+# 5. 진단추가
+# ============================================
+def 진단추가(환자id, 방문id, 진단명, 상태="활성", 비고=""):
+    """진단 기록을 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO 진단 (환자id, 방문id, 진단명, 상태, 비고) VALUES (?, ?, ?, ?, ?)",
+                (환자id, 방문id, 진단명, 상태, 비고)
+            )
+    finally:
+        conn.close()
+
+
+# ============================================
+# 6. 검사결과추가
+# ============================================
+def 검사결과추가(환자id, 검사시행일, 검사항목, 결과값, 단위="", 참고범위=""):
+    """혈액검사 결과를 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO 검사결과 (환자id, 검사시행일, 검사항목, 결과값, 단위, 참고범위) VALUES (?, ?, ?, ?, ?, ?)",
+                (환자id, 검사시행일, 검사항목, 결과값, 단위, 참고범위)
+            )
+    finally:
+        conn.close()
+
+
+# ============================================
+# 7. 영상검사추가
+# ============================================
+def 영상검사추가(환자id, 검사시행일, 검사종류, 결과요약="", 주요수치=""):
+    """영상검사 결과를 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO 영상검사 (환자id, 검사시행일, 검사종류, 결과요약, 주요수치) VALUES (?, ?, ?, ?, ?)",
+                (환자id, 검사시행일, 검사종류, 결과요약, 주요수치)
+            )
+    finally:
+        conn.close()
+
+
+# ============================================
+# 8. 추적계획추가
+# ============================================
+def 추적계획추가(환자id, 방문id, 예정일, 내용):
+    """추적 계획을 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO 추적계획 (환자id, 방문id, 예정일, 내용) VALUES (?, ?, ?, ?)",
+                (환자id, 방문id, 예정일, 내용)
+            )
+    finally:
+        conn.close()
+
+
+# ============================================
+# 9. 환자전체기록조회
+# ============================================
+def 환자전체기록조회(환자id):
+    """환자의 모든 기록을 조회하여 dict로 반환한다."""
+    conn = DB연결()
+    try:
+        # 환자 기본정보
+        환자 = conn.execute("SELECT * FROM 환자 WHERE 환자id = ?", (환자id,)).fetchone()
+        if not 환자:
+            return None
+
+        # 방문 기록
+        방문목록 = conn.execute(
+            "SELECT * FROM 방문 WHERE 환자id = ? ORDER BY 방문일 DESC", (환자id,)
+        ).fetchall()
+
+        # 진단 기록
+        진단목록 = conn.execute(
+            "SELECT 진단.*, 방문.방문일 FROM 진단 LEFT JOIN 방문 ON 진단.방문id = 방문.방문id WHERE 진단.환자id = ?", (환자id,)
+        ).fetchall()
+
+        # 검사결과
+        검사목록 = conn.execute(
+            "SELECT * FROM 검사결과 WHERE 환자id = ? ORDER BY 검사시행일 DESC", (환자id,)
+        ).fetchall()
+
+        # 영상검사
+        영상목록 = conn.execute(
+            "SELECT * FROM 영상검사 WHERE 환자id = ? ORDER BY 검사시행일 DESC", (환자id,)
+        ).fetchall()
+
+        # 추적계획
+        추적목록 = conn.execute(
+            "SELECT 추적계획.*, 방문.방문일 FROM 추적계획 LEFT JOIN 방문 ON 추적계획.방문id = 방문.방문id WHERE 추적계획.환자id = ? ORDER BY 예정일", (환자id,)
+        ).fetchall()
+
+        return {
+            "환자": dict(환자),
+            "방문": [dict(행) for 행 in 방문목록],
+            "진단": [dict(행) for 행 in 진단목록],
+            "검사결과": [dict(행) for 행 in 검사목록],
+            "영상검사": [dict(행) for 행 in 영상목록],
+            "추적계획": [dict(행) for 행 in 추적목록],
+        }
+    finally:
+        conn.close()
+
+
+# ============================================
+# 통계보기
 # ============================================
 def 통계보기():
-    """DB에서 직접 통계를 계산하여 출력한다."""
+    """DB에서 통계를 계산하여 출력한다."""
     conn = DB연결()
     try:
-        # 전체 환자 수와 평균 나이
-        행 = conn.execute("SELECT COUNT(*), AVG(나이) FROM 환자").fetchone()
-        전체환자수 = 행[0]
-        평균나이 = 행[1]
+        # 전체 환자 수
+        전체환자수 = conn.execute("SELECT COUNT(*) FROM 환자").fetchone()[0]
 
         if 전체환자수 == 0:
             print("등록된 환자가 없습니다.")
             return
 
-        # 진단별 환자 수
+        # 전체 방문 수
+        전체방문수 = conn.execute("SELECT COUNT(*) FROM 방문").fetchone()[0]
+
+        # 진단별 환자 수 (활성 진단 기준)
         진단별결과 = conn.execute(
-            "SELECT 진단, COUNT(*) as 환자수 FROM 환자 GROUP BY 진단"
+            "SELECT 진단명, COUNT(DISTINCT 환자id) as 환자수 FROM 진단 WHERE 상태 = '활성' GROUP BY 진단명"
         ).fetchall()
 
-        # 고혈압 환자 수 (정상 혈압 = 수축기 < 120 AND 이완기 < 80, 그 외는 고혈압)
-        행 = conn.execute(
-            "SELECT COUNT(*) FROM 환자 WHERE NOT (수축기 < 120 AND 이완기 < 80)"
-        ).fetchone()
-        고혈압환자수 = 행[0]
-        고혈압비율 = 고혈압환자수 / 전체환자수 * 100
+        # 최근 방문 5건
+        최근방문 = conn.execute(
+            """SELECT 방문.방문일, 환자.이름, 방문.수축기, 방문.이완기
+               FROM 방문 JOIN 환자 ON 방문.환자id = 환자.환자id
+               ORDER BY 방문.방문일 DESC LIMIT 5"""
+        ).fetchall()
 
         # 결과 출력
         print("\n=== 통계 ===")
         print(f" 전체 환자 수: {전체환자수}명")
-        print(f" 평균 나이: {평균나이:.1f}세")
-        print("\n [진단별 환자 수]")
-        for 행 in 진단별결과:
-            print(f"  {행['진단']}: {행['환자수']}명")
-        print(f"\n 고혈압 비율 (정상 혈압 제외): {고혈압환자수}명 / {전체환자수}명 ({고혈압비율:.1f}%)")
+        print(f" 전체 방문 수: {전체방문수}건")
+
+        if 진단별결과:
+            print("\n [활성 진단별 환자 수]")
+            for 행 in 진단별결과:
+                print(f"  {행['진단명']}: {행['환자수']}명")
+
+        if 최근방문:
+            print("\n [최근 방문 기록]")
+            for 행 in 최근방문:
+                판정 = 혈압판정(행['수축기'], 행['이완기'])
+                print(f"  {행['방문일']} | {행['이름']} | BP {행['수축기']}/{행['이완기']} ({판정})")
+
         print("")
     finally:
         conn.close()
