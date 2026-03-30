@@ -137,6 +137,19 @@ def 숫자입력(질문, 최소, 최대):
             print("숫자를 입력하세요")
 
 
+def 실수입력(질문, 최소, 최대):
+    """범위 내 실수를 입력받아 반환한다."""
+    while True:
+        try:
+            값 = float(input(질문))
+            if 최소 <= 값 <= 최대:
+                return 값
+            else:
+                print(f" {최소}-{최대} 사이의 값을 입력하세요")
+        except ValueError:
+            print(" 숫자를 입력하세요")
+
+
 def 나이계산(생년월일):
     """생년월일(YYYYMMDD)에서 현재 나이를 계산한다."""
     try:
