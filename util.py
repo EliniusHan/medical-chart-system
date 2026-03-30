@@ -55,8 +55,9 @@ def DB연결():
             환자id INTEGER,
             방문id INTEGER,
             진단명 TEXT,
-            상태 TEXT CHECK(상태 IN ('활성', '관해', '종결')),
+            상태 TEXT CHECK(상태 IN ('활성', '의심', '종결')),
             비고 TEXT,
+            표준코드 TEXT,
             FOREIGN KEY (환자id) REFERENCES 환자(환자id),
             FOREIGN KEY (방문id) REFERENCES 방문(방문id)
         )
@@ -196,14 +197,14 @@ def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키
         conn.close()
 
 
-def 진단추가(환자id, 방문id, 진단명, 상태="활성", 비고=""):
+def 진단추가(환자id, 방문id, 진단명, 상태="활성", 비고="", 표준코드=None):
     """진단 기록을 추가한다."""
     conn = DB연결()
     try:
         with conn:
             conn.execute(
-                "INSERT INTO 진단 (환자id, 방문id, 진단명, 상태, 비고) VALUES (?, ?, ?, ?, ?)",
-                (환자id, 방문id, 진단명, 상태, 비고)
+                "INSERT INTO 진단 (환자id, 방문id, 진단명, 상태, 비고, 표준코드) VALUES (?, ?, ?, ?, ?, ?)",
+                (환자id, 방문id, 진단명, 상태, 비고, 표준코드)
             )
     finally:
         conn.close()
@@ -415,7 +416,7 @@ def 영상검사수정(영상id, 수정할항목, 새값):
 
 def 진단수정_단일(진단id, 수정할항목, 새값):
     """이 차트(진단id)의 진단만 수정한다."""
-    허용항목 = ["진단명", "상태", "비고"]
+    허용항목 = ["진단명", "상태", "비고", "표준코드"]
     if 수정할항목 not in 허용항목:
         return False
     conn = DB연결()
@@ -432,7 +433,7 @@ def 진단수정_단일(진단id, 수정할항목, 새값):
 
 def 진단수정_선택(진단id_리스트, 수정할항목, 새값):
     """선택한 진단id들만 수정한다."""
-    허용항목 = ["진단명", "상태", "비고"]
+    허용항목 = ["진단명", "상태", "비고", "표준코드"]
     if 수정할항목 not in 허용항목:
         return 0
     conn = DB연결()
