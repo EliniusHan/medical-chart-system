@@ -9,13 +9,13 @@
 - Claude API (예정)
 
 ## 현재 상태
-- 환자 등록/검색/수정/삭제/통계 기능 완성 (JSON 기반 — `Day4_step3.py` + `util.py`)
+- 환자 등록/검색/수정/삭제/통계 기능 완성 (JSON 기반 — `main_system.py` + `util.py`)
 - SQLite 전환 진행 중 (`json_to_sqlite.py`로 JSON → SQLite 변환 완료, 메인 시스템은 아직 JSON 사용)
 
 ## 파일 구조
 
 ### 핵심 파일
-- `Day4_step3.py` — 환자 관리 시스템 본체 (등록/삭제/수정/목록/검색/통계 메뉴)
+- `main_system.py` — 환자 관리 시스템 본체 (등록/삭제/수정/목록/검색/통계 메뉴)
 - `util.py` — 공용 유틸리티 함수 (혈압판정, 환자브리핑, 저장/불러오기, 숫자입력, 통계보기)
 - `json_to_sqlite.py` — JSON → SQLite 변환 스크립트 + SQL 검색 예제
 
@@ -23,15 +23,15 @@
 - `환자DB.json` — 환자 데이터 (JSON, 현재 메인 시스템이 사용)
 - `환자DB.db` — 환자 데이터 (SQLite, 전환 대상)
 
-### 학습 과정 (Day1~Day5)
-- `Day1_step1.py` — 변수, 출력, 조건문 기초
-- `Day1_step2.py` — 딕셔너리, 리스트, 반복문
-- `Day2.py` — input으로 환자 정보 입력받기, 혈압 판정
-- `Day3_step1.py` — 함수 정의 (혈압판정, 환자브리핑), 하드코딩 데이터
-- `Day3_step2.py` — while 반복문으로 환자 등록 시스템
-- `Day4_step1.py` — 파일 읽기/쓰기 기초 (txt)
-- `Day4_step2.py` — JSON 저장/불러오기 기초
-- `Day5.py` — try/except 예외 처리
+### 학습 과정 (`Test/` 폴더)
+- `Test/Day1_step1.py` — 변수, 출력, 조건문 기초
+- `Test/Day1_step2.py` — 딕셔너리, 리스트, 반복문
+- `Test/Day2.py` — input으로 환자 정보 입력받기, 혈압 판정
+- `Test/Day3_step1.py` — 함수 정의 (혈압판정, 환자브리핑), 하드코딩 데이터
+- `Test/Day3_step2.py` — while 반복문으로 환자 등록 시스템
+- `Test/Day4_step1.py` — 파일 읽기/쓰기 기초 (txt)
+- `Test/Day4_step2.py` — JSON 저장/불러오기 기초
+- `Test/Day5.py` — try/except 예외 처리
 
 ### 문서
 - `curriculum.md` — 학습 커리큘럼
