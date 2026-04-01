@@ -44,9 +44,16 @@ def DB연결():
             운동 TEXT,
             free_text TEXT,
             처방요약 TEXT,
+            분석완료 INTEGER DEFAULT 1,
             FOREIGN KEY (환자id) REFERENCES 환자(환자id)
         )
     """)
+
+    # 기존 DB에 분석완료 칼럼이 없으면 추가
+    try:
+        conn.execute("SELECT 분석완료 FROM 방문 LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE 방문 ADD COLUMN 분석완료 INTEGER DEFAULT 1")
 
     # ---- 3. 진단 테이블 ----
     conn.execute("""
@@ -182,15 +189,15 @@ def 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력=
         conn.close()
 
 
-def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연="", 음주="", 운동="", free_text="", 처방요약=""):
+def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연="", 음주="", 운동="", free_text="", 처방요약="", 분석완료=1):
     """방문 기록을 추가하고, 방문id를 반환한다."""
     conn = DB연결()
     try:
         with conn:
             cursor = conn.execute(
-                """INSERT INTO 방문 (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약)
+                """INSERT INTO 방문 (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약, 분석완료)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약, 분석완료)
             )
             return cursor.lastrowid
     finally:
@@ -258,6 +265,30 @@ def 환자목록가져오기():
     try:
         결과 = conn.execute("SELECT * FROM 환자").fetchall()
         return [dict(행) for 행 in 결과]
+    finally:
+        conn.close()
+
+
+def 미분석차트조회():
+    """분석완료=0인 방문 기록을 dict 리스트로 반환한다."""
+    conn = DB연결()
+    try:
+        결과 = conn.execute(
+            """SELECT 방문.*, 환자.이름
+               FROM 방문 JOIN 환자 ON 방문.환자id = 환자.환자id
+               WHERE 방문.분석완료 = 0"""
+        ).fetchall()
+        return [dict(행) for 행 in 결과]
+    finally:
+        conn.close()
+
+
+def 분석완료처리(방문id):
+    """방문 기록의 분석완료를 1로 업데이트한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute("UPDATE 방문 SET 분석완료 = 1 WHERE 방문id = ?", (방문id,))
     finally:
         conn.close()
 
