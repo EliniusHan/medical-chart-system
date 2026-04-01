@@ -13,6 +13,7 @@ from util import (
 
 from briefing_generator import 브리핑생성
 from chart_analyzer import 차트분석, 분석결과_확인, 분석결과_저장
+from datetime import datetime
 
 # 프로그램 시작
 print("=== 의료 차트 시스템 (SQLite DB 기반) ===")
@@ -228,7 +229,6 @@ while True:
 
         if not 분석결과:
             # AI 분석 실패 → free_text만 저장 (분석완료=0)
-            from datetime import datetime
             방문일 = datetime.today().strftime("%y%m%d")
             방문id = 방문기록추가(
                 환자id, 방문일, 0, 0, 0, 0, 0, 0,
@@ -252,7 +252,6 @@ while True:
         처방 = 확인결과.get("처방요약", "")
 
         if 활력:
-            from datetime import datetime
             방문일 = datetime.today().strftime("%y%m%d")
             수축기 = int(활력.get("수축기", 0))
             이완기 = int(활력.get("이완기", 0))
@@ -269,7 +268,6 @@ while True:
             판정 = 혈압판정(수축기, 이완기)
             print(f"\n → 방문기록 저장: BP {수축기}/{이완기} ({판정}), BMI {BMI}")
         else:
-            from datetime import datetime
             방문일 = datetime.today().strftime("%y%m%d")
             방문id = 방문기록추가(
                 환자id, 방문일, 0, 0, 0, 0, 0, 0,
