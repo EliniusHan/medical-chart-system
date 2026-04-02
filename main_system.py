@@ -39,7 +39,7 @@ if 미분석:
 
             print(f"  free-text: {free_text[:100]}{'...' if len(free_text) > 100 else ''}")
             print("  AI 분석 중...")
-            분석결과 = 차트분석(차트["환자id"], free_text)
+            분석결과 = 차트분석(차트["환자id"], free_text, 차트["방문일"])
             if not 분석결과:
                 print("  분석 실패, 다음에 다시 시도합니다.")
                 continue
@@ -211,6 +211,10 @@ while True:
             continue
 
         환자id = 선택환자["환자id"]
+        방문일 = input(" 방문일 (YYMMDD, 오늘이면 Enter): ").strip()
+        if not 방문일:
+            방문일 = datetime.today().strftime("%y%m%d")
+
         print("\n 차트 내용을 입력하세요 (빈 줄 입력 시 종료):")
         줄들 = []
         while True:
@@ -225,11 +229,10 @@ while True:
             continue
 
         print("\n AI 분석 중...")
-        분석결과 = 차트분석(환자id, free_text)
+        분석결과 = 차트분석(환자id, free_text, 방문일)
 
         if not 분석결과:
             # AI 분석 실패 → free_text만 저장 (분석완료=0)
-            방문일 = datetime.today().strftime("%y%m%d")
             방문id = 방문기록추가(
                 환자id, 방문일, 0, 0, 0, 0, 0, 0,
                 "", "", "", free_text, "", 분석완료=0
@@ -252,7 +255,6 @@ while True:
         처방 = 확인결과.get("처방요약", "")
 
         if 활력:
-            방문일 = datetime.today().strftime("%y%m%d")
             수축기 = int(활력.get("수축기", 0))
             이완기 = int(활력.get("이완기", 0))
             심박수 = int(활력.get("심박수", 0))
@@ -268,7 +270,6 @@ while True:
             판정 = 혈압판정(수축기, 이완기)
             print(f"\n → 방문기록 저장: BP {수축기}/{이완기} ({판정}), BMI {BMI}")
         else:
-            방문일 = datetime.today().strftime("%y%m%d")
             방문id = 방문기록추가(
                 환자id, 방문일, 0, 0, 0, 0, 0, 0,
                 생활.get("흡연", ""), 생활.get("음주", ""), 생활.get("운동", ""),
