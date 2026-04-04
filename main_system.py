@@ -115,9 +115,21 @@ def 전체이력출력(기록):
     print(f"\n--- 방문 기록 ({len(기록['방문'])}건) ---")
     if 기록["방문"]:
         for v in 기록["방문"]:
-            판정 = 혈압판정(v['수축기'], v['이완기'])
-            print(f"  [방문id:{v['방문id']}] [{v['방문일']}] BP {v['수축기']}/{v['이완기']} ({판정}) | HR {v['심박수']}")
-            print(f"    키: {v['키']}cm  몸무게: {v['몸무게']}kg  BMI: {v['BMI']}")
+            if v['수축기'] and v['이완기']:
+                판정 = 혈압판정(v['수축기'], v['이완기'])
+                hr표시 = f" | HR {v['심박수']}" if v['심박수'] else ""
+                print(f"  [방문id:{v['방문id']}] [{v['방문일']}] BP {v['수축기']}/{v['이완기']} ({판정}){hr표시}")
+            else:
+                print(f"  [방문id:{v['방문id']}] [{v['방문일']}] BP: 미측정")
+            체중항목 = []
+            if v['키']:
+                체중항목.append(f"키: {v['키']}cm")
+            if v['몸무게']:
+                체중항목.append(f"몸무게: {v['몸무게']}kg")
+            if v['BMI']:
+                체중항목.append(f"BMI: {v['BMI']}")
+            if 체중항목:
+                print(f"    {'  '.join(체중항목)}")
             if v['흡연'] or v['음주'] or v['운동']:
                 print(f"    흡연: {v['흡연']}  음주: {v['음주']}  운동: {v['운동']}")
             if v['free_text']:
@@ -176,10 +188,8 @@ while True:
         이름 = input(" 환자 이름: ").strip()
         생년월일 = input(" 생년월일 (YYYYMMDD): ").strip()
         성별 = input(" 성별 (M/F): ").strip()
-        가족력 = input(" 가족력 (없으면 Enter): ").strip()
-        약부작용이력 = input(" 약부작용이력 (없으면 Enter): ").strip()
 
-        환자id = 환자등록(이름, 생년월일, 성별, 가족력, 약부작용이력)
+        환자id = 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력="")
         전체수 = len(환자목록가져오기())
         나이 = 나이계산(생년월일)
         나이표시 = f", {나이}세" if 나이 is not None else ""
@@ -234,7 +244,7 @@ while True:
         if not 분석결과:
             # AI 분석 실패 → free_text만 저장 (분석완료=0)
             방문id = 방문기록추가(
-                환자id, 방문일, 0, 0, 0, 0, 0, 0,
+                환자id, 방문일, None, None, None, None, None, None,
                 "", "", "", free_text, "", 분석완료=0
             )
             print("\n ⚠ AI 분석에 실패했습니다.")
@@ -255,23 +265,26 @@ while True:
         처방 = 확인결과.get("처방요약", "")
 
         if 활력:
-            수축기 = int(활력.get("수축기", 0))
-            이완기 = int(활력.get("이완기", 0))
-            심박수 = int(활력.get("심박수", 0))
-            키 = float(활력.get("키", 0))
-            몸무게 = float(활력.get("몸무게", 0))
-            BMI = round(몸무게 / ((키 / 100) ** 2), 1) if 키 > 0 else 0
+            수축기 = int(활력["수축기"]) if 활력.get("수축기") else None
+            이완기 = int(활력["이완기"]) if 활력.get("이완기") else None
+            심박수 = int(활력["심박수"]) if 활력.get("심박수") else None
+            키 = float(활력["키"]) if 활력.get("키") else None
+            몸무게 = float(활력["몸무게"]) if 활력.get("몸무게") else None
+            BMI = round(몸무게 / ((키 / 100) ** 2), 1) if 키 and 몸무게 else None
             방문id = 방문기록추가(
                 환자id, 방문일, 수축기, 이완기, 심박수,
                 키, 몸무게, BMI,
                 생활.get("흡연", ""), 생활.get("음주", ""), 생활.get("운동", ""),
                 free_text, 처방
             )
-            판정 = 혈압판정(수축기, 이완기)
-            print(f"\n → 방문기록 저장: BP {수축기}/{이완기} ({판정}), BMI {BMI}")
+            if 수축기 and 이완기:
+                판정 = 혈압판정(수축기, 이완기)
+                print(f"\n → 방문기록 저장: BP {수축기}/{이완기} ({판정}), BMI {BMI}")
+            else:
+                print(f"\n → 방문기록 저장 (BP 미측정, BMI {BMI})")
         else:
             방문id = 방문기록추가(
-                환자id, 방문일, 0, 0, 0, 0, 0, 0,
+                환자id, 방문일, None, None, None, None, None, None,
                 생활.get("흡연", ""), 생활.get("음주", ""), 생활.get("운동", ""),
                 free_text, 처방
             )
