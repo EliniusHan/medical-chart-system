@@ -35,11 +35,11 @@ def _strip_codeblock(text):
         text = "\n".join(lines).strip()
     return text
 
-def _call_api(system, user, max_tokens=4096):
+def _call_api(system, user, max_tokens=4096, temperature=0.1):
     응답 = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tokens,
-        temperature=0.1,
+        temperature=temperature,
         system=system,
         messages=[{"role": "user", "content": user}]
     )
@@ -74,7 +74,27 @@ STAT_SYSTEM = f"""당신은 의료 통계 분석 어시스턴트입니다.
 4. 분석 과정 설명
 를 JSON으로 반환하세요.
 
-JSON 형식:
+분석 유형 판단:
+  연구 질문을 보고 어떤 분석이 필요한지 판단하세요:
+
+  1. 정형 데이터만으로 충분한 경우 (검사 수치, 진단명, 혈압 등):
+     → 기존처럼 SQL + 통계 코드로 처리 (analysis_type 필드 생략 또는 'standard')
+
+  2. free_text 내용 분석이 필요한 경우 (증상, 부작용 호소, 환자 표현 등):
+     → SQL로 후보 환자를 먼저 추린 후
+     → 추려진 환자의 free_text를 분석하는 방식으로 처리
+     → JSON에 'analysis_type': 'freetext' 추가
+
+  free_text 분석이 필요한 예시:
+    '부작용을 호소한 환자' → 증상 표현이 다양하므로 free_text 분석 필요
+    '금연 성공한 환자의 패턴' → 경과 기록 분석 필요
+    '환자 교육 내용을 정리해줘' → free_text에만 있는 정보
+
+  free_text 분석 불필요 예시:
+    'LDL 평균 구해줘' → 검사결과 테이블만으로 충분
+    '고혈압 환자 수' → 진단 테이블만으로 충분
+
+JSON 형식 (정형 데이터 분석):
 {{
   "sql": "SELECT ...",
   "method": "paired t-test",
@@ -84,6 +104,21 @@ JSON 형식:
     "grouping": "...",
     "method_reason": "...",
     "result_interpretation": "p-value=0.012로 통계적으로 유의한 차이가 있음. 평균 LDL이 173에서 94로 감소."
+  }}
+}}
+
+JSON 형식 (free_text 분석):
+{{
+  "sql": "후보 환자 추림용 SQL (예: 스타틴 복용 중인 진단 환자 추출)",
+  "analysis_type": "freetext",
+  "freetext_query": "이 환자들의 차트에서 스타틴 관련 부작용 증상을 찾아주세요. 직접적 언급뿐 아니라 근육통, myalgia, 다리 뻣뻣함, 소변색 변화 등 관련 증상도 포함.",
+  "method": "freetext content analysis",
+  "code": "",
+  "explanation": {{
+    "data_selection": "...",
+    "grouping": "",
+    "method_reason": "free_text에 기록된 증상 표현은 정형화하기 어려우므로 AI 텍스트 분석 사용",
+    "result_interpretation": ""
   }}
 }}
 
@@ -409,7 +444,115 @@ def _설명출력(explanation):
 
 
 # ============================================================
-# 4. 통계분석_자동 — 모드 1
+# 4. free_text 분석 공통 실행기
+# ============================================================
+
+def _freetext_분석실행(질문, 계획):
+    """free_text AI 분석 모드. 통계분석_자동/단계별 공통으로 사용."""
+    sql = 계획.get('sql', '')
+    freetext_query = 계획.get('freetext_query', '')
+
+    print(f"\n [분석 방식] free_text AI 분석")
+    print(" 분석 범위:")
+    print("  1. SQL로 후보 추린 후 분석 (권장, 비용 절감)")
+    print("  2. 전체 환자 분석 (정밀, 비용 높음)")
+    범위 = input(" 선택 (1/2): ").strip()
+
+    conn = sqlite3.connect(DB경로)
+    conn.row_factory = sqlite3.Row
+
+    if 범위 == "2":
+        rows = conn.execute(
+            "SELECT 방문.*, 환자.이름 FROM 방문 JOIN 환자 ON 방문.환자id=환자.환자id "
+            "WHERE 방문.유효여부=1 AND 방문.free_text IS NOT NULL AND 방문.free_text != ''"
+        ).fetchall()
+        차트들 = [dict(r) for r in rows]
+        conn.close()
+        print(f" → 전체 환자 {len(set(c['환자id'] for c in 차트들))}명, free_text {len(차트들)}건")
+    else:
+        print(f" [추림 SQL]\n  {sql}")
+        try:
+            후보컬럼, 후보결과 = SQL실행(sql)
+        except Exception as e:
+            conn.close()
+            print(f" ⚠ SQL 실행 오류: {e}\n")
+            return
+        환자ids = list(set(row['환자id'] for row in 후보결과))
+        print(f" → {len(환자ids)}명 추려짐")
+        차트들 = []
+        for pid in 환자ids:
+            rows = conn.execute(
+                "SELECT 방문.*, 환자.이름 FROM 방문 JOIN 환자 ON 방문.환자id=환자.환자id "
+                "WHERE 방문.환자id=? AND 방문.유효여부=1 AND 방문.free_text IS NOT NULL AND 방문.free_text != ''",
+                (pid,)
+            ).fetchall()
+            차트들.extend([dict(r) for r in rows])
+        conn.close()
+
+    if not 차트들:
+        print(" 분석할 free_text가 없습니다.\n")
+        return
+
+    # 비용 안내
+    총글자 = sum(len(c.get('free_text', '')) for c in 차트들)
+    예상토큰 = 총글자 // 4
+    print(f"\n 분석 대상: {len(set(c['환자id'] for c in 차트들))}명, free_text {len(차트들)}건")
+    print(f" 예상 토큰: 약 {예상토큰 // 1000}K")
+    if input(" 진행할까요? (y/n): ").strip().lower() != 'y':
+        print(" → 취소됨\n")
+        return
+
+    # 비식별화
+    이름목록 = list(set(c['이름'] for c in 차트들))
+    이름매핑 = {name: f"환자{i+1:03d}" for i, name in enumerate(이름목록)}
+    역매핑 = {v: k for k, v in 이름매핑.items()}
+
+    비식별_차트 = ""
+    for c in 차트들:
+        비식별_차트 += f"\n[{이름매핑[c['이름']]}] ({c['방문일']}):\n{c['free_text']}\n"
+
+    # AI에게 분석 요청
+    print("\n AI 분석 중...")
+    분석_프롬프트 = f"""연구 질문: {질문}
+
+다음은 {len(set(c['환자id'] for c in 차트들))}명 환자의 진료 기록입니다.
+각 환자의 차트를 읽고 연구 질문에 해당하는 내용을 찾아주세요.
+직접적 언급뿐 아니라 관련 증상, 동의어, 의학 약어도 포함하세요.
+
+{freetext_query}
+
+{비식별_차트}
+
+결과 형식:
+=== 분석 결과 ===
+해당 환자: N명 / 전체 N명 (N%)
+
+[환자별 상세]
+환자001 (방문일): 관련 내용, 판단, 근거
+
+[요약]
+전체적인 패턴, 특이사항, 통계적 의미"""
+
+    try:
+        분석결과 = _call_api(
+            "당신은 의료 차트 내용 분석 전문가입니다. 순수 한국어 텍스트로만 답변하세요.",
+            분석_프롬프트,
+            max_tokens=2048,
+            temperature=0.3
+        )
+    except Exception as e:
+        print(f" ⚠ AI 분석 오류: {e}\n")
+        return
+
+    # 비식별 → 실명 복원
+    for 비식별, 실명 in 역매핑.items():
+        분석결과 = 분석결과.replace(비식별, 실명)
+
+    print(f"\n{분석결과}\n")
+
+
+# ============================================================
+# 5. 통계분석_자동 — 모드 1
 # ============================================================
 
 def 통계분석_자동(질문=None):
@@ -431,6 +574,11 @@ def 통계분석_자동(질문=None):
     if not 계획:
         print(" ⚠ AI 응답을 파싱할 수 없습니다.")
         print(f" 원본:\n{raw[:300]}\n")
+        return
+
+    # free_text 분석 모드 분기
+    if 계획.get('analysis_type') == 'freetext':
+        _freetext_분석실행(질문, 계획)
         return
 
     # SQL 확인
@@ -588,9 +736,13 @@ def 통계분석_단계별():
     print("\n Step 4: 분석 코드 생성 중...")
     코드응답 = _ai_제안(대화기록,
         "지금까지 논의된 내용을 바탕으로 완전한 분석 JSON을 생성해주세요. "
-        f"형식: {{\"sql\": \"...\", \"method\": \"...\", \"code\": \"...\", "
+        "free_text 분석이 필요한 경우 analysis_type='freetext'와 freetext_query 필드를 포함하세요. "
+        f"정형 분석 형식: {{\"sql\": \"...\", \"method\": \"...\", \"code\": \"...\", "
         f"\"explanation\": {{\"data_selection\": \"...\", \"grouping\": \"...\", "
-        f"\"method_reason\": \"...\", \"result_interpretation\": \"...\"}}}}  순수 JSON만 출력.")
+        f"\"method_reason\": \"...\", \"result_interpretation\": \"...\"}}}}  "
+        f"free_text 분석 형식: {{\"sql\": \"후보추림SQL\", \"analysis_type\": \"freetext\", "
+        f"\"freetext_query\": \"...\", \"method\": \"freetext content analysis\", \"code\": \"\"}}  "
+        "순수 JSON만 출력.")
 
     계획 = _parse_stat_response(코드응답)
     if not 계획:
@@ -601,6 +753,11 @@ def 통계분석_단계별():
 
     if not 계획:
         print(" ⚠ 분석 계획 생성 실패\n")
+        return
+
+    # free_text 분석 모드 분기
+    if 계획.get('analysis_type') == 'freetext':
+        _freetext_분석실행(질문, 계획)
         return
 
     code = 계획.get("code", "")
