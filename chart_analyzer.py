@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from util import (
     환자전체기록조회, 나이계산,
-    방문기록추가, 방문기록수정,
+    방문기록수정,
     진단추가, 검사결과추가, 영상검사추가, 추적계획추가,
     추적계획완료, 환자정보수정, DB연결,
 )
