@@ -415,7 +415,8 @@ while True:
             print("\n [방문 목록]")
             for v in 기록["방문"]:
                 판정 = 혈압판정(v['수축기'], v['이완기'])
-                print(f"  방문id:{v['방문id']} | {v['방문일']} | BP {v['수축기']}/{v['이완기']} ({판정})")
+                bp표시 = "BP: 미측정" if not v['수축기'] or not v['이완기'] else f"BP {v['수축기']}/{v['이완기']}"
+                print(f"  방문id:{v['방문id']} | {v['방문일']} | {bp표시} ({판정})")
             방문id = 숫자입력(" 수정할 방문id: ", 1, 999999)
             항목 = input(" 수정할 항목 (방문일/수축기/이완기/심박수/키/몸무게/BMI/흡연/음주/운동/free_text/처방요약): ").strip()
             새값 = input(f" 새로운 {항목}: ").strip()
@@ -561,7 +562,8 @@ while True:
                 continue
             print("\n [방문 목록]")
             for v in 기록["방문"]:
-                print(f"  방문id:{v['방문id']} | {v['방문일']} | BP {v['수축기']}/{v['이완기']}")
+                bp표시 = "BP: 미측정" if not v['수축기'] or not v['이완기'] else f"BP {v['수축기']}/{v['이완기']}"
+                print(f"  방문id:{v['방문id']} | {v['방문일']} | {bp표시}")
             방문id = 숫자입력(" 삭제할 방문id: ", 1, 999999)
             print(" ※ free_text만 삭제됩니다. 검사결과/영상검사/진단/추적계획은 유지됩니다.")
             확인 = input(" 계속? (y/n): ").strip().lower()
