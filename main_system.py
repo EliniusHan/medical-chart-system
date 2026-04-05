@@ -13,7 +13,7 @@ from util import (
 
 from briefing_generator import 브리핑생성
 from chart_analyzer import 차트분석, 분석결과_확인, 분석결과_저장
-from research_module import 연구검색
+from research_module import 연구검색, 통계분석_자동, 통계분석_단계별
 from datetime import datetime
 
 # 프로그램 시작
@@ -662,7 +662,18 @@ while True:
     # 연구검색
     # ============================================
     elif 명령 in ("연구검색", "9"):
-        연구검색()
+        print("\n 연구 도구:")
+        print("  1. 자연어 검색 (SQL)")
+        print("  2. AI 자동 통계 분석")
+        print("  3. 단계별 통계 분석")
+        도구 = 숫자입력(" 번호 선택: ", 1, 3)
+
+        if 도구 == 1:
+            연구검색()
+        elif 도구 == 2:
+            통계분석_자동()
+        elif 도구 == 3:
+            통계분석_단계별()
 
     else:
         print(" 알 수 없는 명령입니다. '신환등록', '브리핑', '차트입력', '환자목록', '검색', '수정', '삭제', '통계', '연구검색', '끝' 중 하나를 입력하세요.")

@@ -8,6 +8,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 from anthropic import Anthropic
 import pandas as pd
+import matplotlib
+matplotlib.rcParams['font.family'] = 'AppleGothic'
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 load_dotenv()
 
@@ -80,16 +83,20 @@ JSON 형식:
     "data_selection": "...",
     "grouping": "...",
     "method_reason": "...",
-    "result_interpretation": "분석 완료 후 채워질 항목"
+    "result_interpretation": "p-value=0.012로 통계적으로 유의한 차이가 있음. 평균 LDL이 173에서 94로 감소."
   }}
 }}
 
 {DB_SCHEMA}
-- 그래프는 matplotlib로 생성하여 '{OUTPUT_DIR}/' 폴더에 저장 (plt.savefig 사용, plt.show() 금지)
-- matplotlib.use('Agg') 를 import 직후에 반드시 추가
+- 그래프 저장 시 반드시 'graph_path' 변수를 사용하세요: plt.savefig(graph_path, ...)
+  (graph_path는 실행 환경에서 자동 주입되는 변수입니다. 직접 파일명을 쓰지 마세요.)
+- plt.show() 금지, matplotlib.use('Agg') 를 import 직후에 반드시 추가
 - 코드에서 DB 연결: import sqlite3; conn = sqlite3.connect(r'{DB경로}')
 - 결과값은 pd.to_numeric(..., errors='coerce') 로 변환
 - explanation의 각 항목은 한국어로, 논문의 Methods/Results 섹션 수준으로 자세하게
+- result_interpretation은 반드시 실제 분석 결과를 기반으로 작성하세요.
+  p-value, 평균, 상관계수 등 구체적 수치를 인용하여 해석하세요.
+  '분석 완료 후 채워질 항목' 같은 플레이스홀더를 절대 사용하지 마세요.
 - 반드시 순수 JSON만 출력. 마크다운 코드블록 없이."""
 
 
@@ -230,6 +237,118 @@ def 라벨링(df, 컬럼, 조건들):
 # 3. 통계 분석 공통 — AI 응답 파싱 & 코드 실행
 # ============================================================
 
+def 통계오류처리(에러, 연구질문="", 데이터요약=""):
+    """통계 코드 실행 오류를 처리한다.
+    알려진 패턴은 상세 설명, 모르는 오류는 AI에게 해석 요청."""
+    오류메시지 = str(에러)
+    오류 = 오류메시지.lower()
+
+    if any(k in 오류 for k in ["singular", "singular matrix", "lapack", "linalg"]):
+        print(" ⚠ 분석 오류: 데이터가 부족하여 회귀분석을 수행할 수 없습니다.")
+        print("    (Singular matrix)")
+        print("\n 원인:")
+        print("  - 표본 수(n)가 독립변수 수(k)보다 적거나 같습니다 (n ≤ k).")
+        print("    → 분석에 사용하는 변수(나이, 성별, BMI 등)가 여러 개인데 환자 수가")
+        print("      그보다 적으면, 수학적으로 방정식을 풀 수 없습니다.")
+        print("      최소한 변수 수보다 환자가 많아야 합니다.")
+        print()
+        print("  - 또는 특정 변수의 모든 값이 동일합니다 (ConstantInputWarning).")
+        print("    → 예: 환자 전원이 남성이면 '성별' 변수에 변동이 없어서")
+        print("      성별이 결과에 미치는 영향을 계산할 수 없습니다.")
+        print()
+        print("  - 독립변수 간 완전 공선성(Multicollinearity)이 존재합니다.")
+        print("    → 예: 키와 BMI를 동시에 넣었는데 키가 BMI 계산에 이미 포함되어 있으면,")
+        print("      두 변수가 사실상 같은 정보를 담고 있어서 분리해서 분석할 수 없습니다.")
+        print("\n 대안:")
+        print("  1. 더 넓은 조건으로 검색 (예: 당뇨 → 전체 환자)")
+        print("  2. 독립변수를 줄여서 단순 상관분석으로 변경")
+        print("     → 여러 변수의 영향을 동시에 보는 대신, 두 변수만 비교")
+        print("  3. 기술통계로 변경 (평균, 범위만 확인)")
+        print("  4. 데이터가 더 쌓인 후 재분석")
+
+    elif any(k in 오류 for k in ["not enough data", "sample size", "valueerror", "zero-size"]):
+        print(" ⚠ 표본 수가 부족합니다.")
+        print("    (n < 30, 중심극한정리 적용 어려움)")
+        print("    → 표본이 30명 미만이면 평균값의 분포가 정규분포에 가깝다고")
+        print("      보장할 수 없어서, 모수 검정의 신뢰도가 낮아집니다.")
+        print("\n 원인:")
+        print("  - 해당 조건을 만족하는 환자 수가 너무 적음")
+        print("  - 결측값(NULL) 제거 후 유효한 데이터가 없음")
+        print("\n 대안:")
+        print("  1. 더 넓은 조건으로 재검색")
+        print("  2. 비모수 검정 또는 기술통계만 수행")
+        print("  3. 데이터가 더 쌓인 후 재분석")
+
+    elif any(k in 오류 for k in ["normality", "shapiro", "normaltest"]):
+        print(" ⚠ 데이터가 정규분포를 따르지 않습니다.")
+        print("    (Shapiro-Wilk test p < 0.05)")
+        print("    → 데이터가 평균을 중심으로 좌우 대칭으로 퍼져있지 않습니다.")
+        print("      극단적으로 높거나 낮은 값이 있거나, 한쪽으로 치우쳐 있을 수 있습니다.")
+        print("      t-test 같은 모수 검정은 정규분포를 가정하므로 결과가 부정확할 수 있습니다.")
+        print("\n 대안: 비모수 검정 사용 권장")
+        print("    → 정규분포를 가정하지 않는 방법")
+        print("      두 그룹 비교: Mann-Whitney U test")
+        print("      전후 비교: Wilcoxon signed-rank test")
+
+    elif any(k in 오류 for k in ["levene", "bartlett", "homoscedasticity", "variance"]):
+        print(" ⚠ 그룹 간 분산이 동일하지 않습니다.")
+        print("    (Levene's test p < 0.05)")
+        print("    → A그룹은 값이 좁은 범위에 모여있는데, B그룹은 넓게 퍼져있습니다.")
+        print("      이런 경우 일반 t-test의 결과를 신뢰하기 어렵습니다.")
+        print("\n 대안: Welch's t-test 사용 권장")
+        print("    → 분산이 달라도 사용 가능한 보정된 t-test")
+
+    elif any(k in 오류 for k in ["keyerror", "column", "no such column", "operationalerror"]):
+        print(" ⚠ 분석 오류: 데이터 컬럼을 찾을 수 없습니다.")
+        print("    (KeyError / OperationalError — SQL 또는 컬럼명 불일치)")
+        print("\n 원인:")
+        print("  - AI가 생성한 SQL의 컬럼명이 실제 DB와 다름")
+        print("\n 대안:")
+        print("  - 질문을 더 구체적으로 입력 후 재시도")
+
+    elif any(k in 오류 for k in ["convergence", "did not converge", "maxiter"]):
+        print(" ⚠ 분석 오류: 모델이 수렴하지 않았습니다.")
+        print("    (Convergence failure — 반복 계산이 최대 횟수에 도달)")
+        print("    → 모델이 '정답'에 가까워지려고 반복 계산하는데,")
+        print("      정해진 횟수 안에 수렴하지 못했습니다.")
+        print("      보통 데이터 스케일 차이가 매우 크거나 표본이 부족할 때 발생합니다.")
+        print("\n 대안:")
+        print("  1. 변수 표준화 후 재시도 (각 변수를 0~1 또는 평균 0, 표준편차 1로 변환)")
+        print("  2. 더 단순한 모델로 변경 (단순 상관분석)")
+
+    else:
+        # 알 수 없는 오류 → AI에게 해석 요청
+        print(f" ⚠ 분석 오류: 코드 실행 중 오류가 발생했습니다.")
+        print(f"    ({오류메시지[:120]})")
+        print("\n AI 오류 해석 중...")
+        ai_프롬프트 = f"""다음 통계 분석 중 오류가 발생했습니다.
+오류: {오류메시지}
+분석 내용: {연구질문 or '(정보 없음)'}
+데이터 현황: {데이터요약 or '(정보 없음)'}
+
+이 오류의 원인을 아래 형식으로 설명하세요.
+JSON이나 코드 없이 순수 한국어 텍스트만 출력하세요.
+
+[오류 원인]
+(전문 용어와 함께 쉽게 풀어서 설명)
+
+[대안]
+(번호 목록으로 구체적인 대안 제시)"""
+        try:
+            ai해석 = _call_api(
+                "당신은 의료 통계 오류를 친절하게 설명하는 전문가입니다. "
+                "JSON이나 코드 없이 순수 한국어 텍스트만 출력하세요.",
+                ai_프롬프트, max_tokens=512
+            )
+            print(ai해석)
+        except Exception:
+            print("\n 대안:")
+            print("  1. 질문을 더 구체적으로 변경 후 재시도")
+            print("  2. 더 단순한 통계 기법 선택 (기술통계 → 상관분석 → 회귀분석 순)")
+
+    print()
+
+
 def _parse_stat_response(raw):
     """AI 응답 JSON 파싱. 실패 시 None 반환."""
     text = _strip_codeblock(raw)
@@ -240,20 +359,37 @@ def _parse_stat_response(raw):
 
 
 def _run_stat_code(code):
-    """AI가 생성한 Python 코드를 실행하고 stdout 캡처."""
+    """AI가 생성한 Python 코드를 실행하고 (stdout, 오류, 그래프경로) 반환."""
     import io, sys
     _output_dir_ensure()
+
+    # 타임스탬프 기반 파일명 생성 → 코드 실행 전에 변수로 주입
+    graph_path = os.path.join(OUTPUT_DIR, f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+
     stdout_buf = io.StringIO()
     old_stdout = sys.stdout
     sys.stdout = stdout_buf
     try:
-        exec(code, {"__builtins__": __builtins__})
+        exec(code, {"__builtins__": __builtins__, "graph_path": graph_path})
     except Exception as e:
         sys.stdout = old_stdout
-        return None, str(e)
+        return None, str(e), None
     finally:
         sys.stdout = old_stdout
-    return stdout_buf.getvalue(), None
+
+    # 실제 저장된 파일 확인 (주입한 경로 또는 폴더 내 최신 파일)
+    그래프경로 = None
+    if os.path.exists(graph_path):
+        그래프경로 = graph_path
+    elif os.path.exists(OUTPUT_DIR):
+        png파일들 = sorted(
+            [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png") or f.endswith(".jpg")],
+            key=lambda f: os.path.getmtime(os.path.join(OUTPUT_DIR, f))
+        )
+        if png파일들:
+            그래프경로 = os.path.join(OUTPUT_DIR, png파일들[-1])
+
+    return stdout_buf.getvalue(), None, 그래프경로
 
 
 def _설명출력(explanation):
@@ -306,24 +442,53 @@ def 통계분석_자동(질문=None):
         print(" → 취소됨\n")
         return
 
-    # 코드 실행
+    # 1단계: 코드 실행 → 실제 결과 숫자 확보
     code = 계획.get("code", "")
     print("\n 분석 실행 중...")
-    출력, 오류 = _run_stat_code(code)
+    출력, 오류, 그래프경로 = _run_stat_code(code)
 
     print("\n=== 분석 결과 ===")
     if 오류:
-        print(f" ⚠ 코드 실행 오류: {오류}\n")
-    else:
-        print(출력 or " (결과 없음)")
+        통계오류처리(오류, 연구질문=질문, 데이터요약=계획.get("sql", ""))
+        return
+    print(출력 or " (결과 없음)")
 
     # 그래프 파일 안내
-    저장된파일 = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png") or f.endswith(".jpg")] if os.path.exists(OUTPUT_DIR) else []
-    if 저장된파일:
-        print(f" 그래프 저장됨: research_output/{저장된파일[-1]}")
+    if 그래프경로:
+        print(f" 그래프 저장됨: {os.path.relpath(그래프경로)}")
 
-    # 설명 출력
-    _설명출력(계획.get("explanation", {}))
+    # 2단계: 실제 결과를 AI에게 보내 해석 요청
+    print("\n 결과 해석 생성 중...")
+    해석_시스템 = """당신은 의료 통계 결과를 해석하는 전문가입니다.
+JSON이나 코드를 출력하지 마세요. 순수 한국어 텍스트만 출력하세요.
+반드시 아래 형식으로 작성하세요:
+
+[데이터 선택]
+(어떤 데이터를 선택했는지)
+
+[그룹 분류]
+(어떻게 그룹을 나눴는지)
+
+[통계 기법 선택 근거]
+(왜 이 통계 기법을 선택했는지)
+
+[결과 해석]
+(실제 숫자를 인용하며 의학적으로 해석. 숫자를 절대 변경하지 말 것)"""
+
+    해석_프롬프트 = f"""연구 질문: {질문}
+통계 기법: {계획.get('method', '')}
+
+실제 분석 결과:
+{출력}"""
+
+    try:
+        실제해석 = _call_api(해석_시스템, 해석_프롬프트, max_tokens=1024)
+    except Exception as e:
+        실제해석 = f"(해석 생성 오류: {e})"
+
+    print("\n=== 분석 과정 설명 ===")
+    print(실제해석)
+    print()
 
 
 # ============================================================
@@ -440,18 +605,16 @@ def 통계분석_단계별():
 
     code = 계획.get("code", "")
     print("\n 분석 실행 중...")
-    _output_dir_ensure()
-    출력, 오류 = _run_stat_code(code)
+    출력, 오류, 그래프경로 = _run_stat_code(code)
 
     print("\n=== 분석 결과 ===")
     if 오류:
-        print(f" ⚠ 코드 실행 오류: {오류}\n")
+        통계오류처리(오류, 연구질문=질문, 데이터요약=계획.get("sql", ""))
     else:
         print(출력 or " (결과 없음)")
 
-    저장된파일 = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png") or f.endswith(".jpg")] if os.path.exists(OUTPUT_DIR) else []
-    if 저장된파일:
-        print(f" 그래프 저장됨: research_output/{저장된파일[-1]}")
+    if 그래프경로:
+        print(f" 그래프 저장됨: {os.path.relpath(그래프경로)}")
 
     _설명출력(계획.get("explanation", {}))
 
