@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 import pandas as pd
 import matplotlib
+from anonymizer import api_익명화, api_복원
 matplotlib.rcParams['font.family'] = 'AppleGothic'
 matplotlib.rcParams['axes.unicode_minus'] = False
 
@@ -502,14 +503,18 @@ def _freetext_분석실행(질문, 계획):
         print(" → 취소됨\n")
         return
 
-    # 비식별화
-    이름목록 = list(set(c['이름'] for c in 차트들))
-    이름매핑 = {name: f"환자{i+1:03d}" for i, name in enumerate(이름목록)}
-    역매핑 = {v: k for k, v in 이름매핑.items()}
+    # 환자별 api_익명화 호출 → PT_XXXXX 매핑 수집
+    전체_매핑 = {}
+    이름_to_랜덤id = {}
+    for 이름 in set(c['이름'] for c in 차트들):
+        임시_익명, 임시_매핑 = api_익명화({"환자": {"이름": 이름}})
+        랜덤id = 임시_익명["환자"]["이름"]   # PT_XXXXX
+        이름_to_랜덤id[이름] = 랜덤id
+        전체_매핑.update(임시_매핑)
 
     비식별_차트 = ""
     for c in 차트들:
-        비식별_차트 += f"\n[{이름매핑[c['이름']]}] ({c['방문일']}):\n{c['free_text']}\n"
+        비식별_차트 += f"\n[{이름_to_랜덤id[c['이름']]}] ({c['방문일']}):\n{c['free_text']}\n"
 
     # AI에게 분석 요청
     print("\n AI 분석 중...")
@@ -528,7 +533,7 @@ def _freetext_분석실행(질문, 계획):
 해당 환자: N명 / 전체 N명 (N%)
 
 [환자별 상세]
-환자001 (방문일): 관련 내용, 판단, 근거
+PT_XXXXX (방문일): 관련 내용, 판단, 근거
 
 [요약]
 전체적인 패턴, 특이사항, 통계적 의미"""
@@ -544,9 +549,9 @@ def _freetext_분석실행(질문, 계획):
         print(f" ⚠ AI 분석 오류: {e}\n")
         return
 
-    # 비식별 → 실명 복원
-    for 비식별, 실명 in 역매핑.items():
-        분석결과 = 분석결과.replace(비식별, 실명)
+    # PT_XXXXX → 실명 복원 후 매핑 폐기
+    분석결과 = api_복원(분석결과, 전체_매핑)
+    전체_매핑 = None
 
     print(f"\n{분석결과}\n")
 

@@ -11,6 +11,7 @@ from util import (
     진단추가, 검사결과추가, 영상검사추가, 추적계획추가,
     추적계획완료, 환자정보수정, DB연결,
 )
+from anonymizer import api_익명화, api_복원
 
 load_dotenv()
 
@@ -225,12 +226,20 @@ def 차트분석(환자id, free_text, 방문일=None):
     if 나이 is not None:
         기록["환자"]["나이"] = f"{나이}세"
 
+    # API 전송 전 익명화
+    익명기록, 매핑 = api_익명화(기록)
+
+    # 입력 free_text에 이름이 포함된 경우 동일하게 치환
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_free_text = free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else free_text
+
     프롬프트 = f"""[기존 환자 데이터]
-{json.dumps(기록, ensure_ascii=False, indent=2)}
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
 
 [이 차트의 방문일: {방문일}]
 [오늘 free-text]
-{free_text}
+{익명_free_text}
 
 위 free-text를 분석하여 기존 데이터와 비교한 뒤, 데이터 추출과 차트 검토를 동시에 수행하여 지정된 JSON 형식으로 출력하세요."""
 
@@ -244,7 +253,9 @@ def 차트분석(환자id, free_text, 방문일=None):
         ]
     )
 
-    응답텍스트 = 응답.content[0].text.strip()
+    # 응답 복원 후 매핑 폐기
+    응답텍스트 = api_복원(응답.content[0].text.strip(), 매핑)
+    매핑 = None
 
     # 마크다운 코드블록 제거 (```json ... ```)
     if 응답텍스트.startswith("```"):
