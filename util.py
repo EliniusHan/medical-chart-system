@@ -185,9 +185,12 @@ def 실수입력(질문, 최소, 최대):
 
 
 def 나이계산(생년월일):
-    """생년월일(YYYYMMDD)에서 현재 나이를 계산한다."""
+    """생년월일(YYYYMMDD 또는 YYYY-MM-DD)에서 현재 나이를 계산한다."""
+    if not 생년월일:
+        return None
     try:
-        생일 = datetime.strptime(생년월일, "%Y%m%d")
+        형식 = "%Y-%m-%d" if "-" in str(생년월일) else "%Y%m%d"
+        생일 = datetime.strptime(str(생년월일), 형식)
         오늘 = datetime.today()
         나이 = 오늘.year - 생일.year
         if (오늘.month, 오늘.day) < (생일.month, 생일.day):
