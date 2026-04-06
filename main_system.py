@@ -14,6 +14,7 @@ from util import (
 from briefing_generator import 브리핑생성
 from chart_analyzer import 차트분석, 분석결과_확인, 분석결과_저장
 from research_module import 연구검색, 통계분석_자동, 통계분석_단계별
+from backup import DB백업
 from datetime import datetime
 
 # 프로그램 시작
@@ -656,6 +657,9 @@ while True:
     # ============================================
     # 관리자 모드 (수동 입력) — 메뉴에 표시 안 됨
     # ============================================
+    elif 명령 == "backup":
+        DB백업()
+
     elif 명령 == "admin":
         print("\n (관리자 모드) 수동 입력을 시작합니다.")
         선택환자 = 환자선택()
