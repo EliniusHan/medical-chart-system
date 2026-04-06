@@ -1,40 +1,52 @@
 # 의료 차트 AI 어시스턴트
 
 ## 목적
-환자 차트 작성 지원 + 연구 데이터 관리
+환자 차트 AI 어시스턴트 + 연구 데이터 관리 시스템
 
 ## 기술 스택
 - Python + SQLite (`환자DB.db`)
 - Claude API (anthropic + python-dotenv)
-
-## 현재 상태
-- 환자 등록/검색/수정/삭제/통계 기능 완성 (`main_system.py` + `util.py`)
-- SQLite 전환 완료 (`환자DB.db` 사용 중)
-- Claude API 연동 (환자 브리핑 생성)
-- 차트 분석 + AI 검토 의견 통합 기능 완성
-- 미분석 차트 자동 감지 및 재분석 시스템
+- pandas, scipy, statsmodels, matplotlib, seaborn (연구/통계)
 
 ## 파일 구조
 
 ### 핵심 파일
-- `main_system.py` — 환자 관리 시스템 본체 (신환등록/브리핑/차트입력(AI 분석)/환자목록/검색/수정/삭제/통계 메뉴 + admin 수동입력)
-- `util.py` — 공용 유틸리티 함수 (혈압판정, 나이계산, DB CRUD, 통계보기)
-- `chart_analyzer.py` — 차트 분석기 (free-text → AI 데이터 추출 + 검토 의견 통합, 유형별 저장)
-- `briefing_generator.py` — Claude API 연동 환자 브리핑 생성
-- `api_test.py` — Claude API 연결 테스트
+- `main_system.py` — 메인 시스템 (환자 중심 워크플로우: 신환등록/환자목록→환자메뉴/연구)
+- `util.py` — DB 함수 (6개 테이블 CRUD, 유효여부 플래그, 정정 기록 방식)
+- `chart_analyzer.py` — 차트 분석기 (free-text → AI 데이터 추출 + 검토 의견, 익명화 적용)
+- `briefing_generator.py` — 브리핑 생성기 (문제 중심 브리핑, 익명화 적용)
+- `research_module.py` — 연구 모듈 (NL2SQL, AI 자동 통계, 단계별 통계, free_text AI 분석)
+- `anonymizer.py` — API 전송용 익명화/복원 (매핑은 메모리에만 존재)
+- `backup.py` — DB 백업 (타임스탬프, 최근 5개 유지)
 
 ### 데이터
-- `환자DB.db` — 환자 데이터 (SQLite)
+- `환자DB.db` — 환자 데이터 (SQLite, 6개 테이블 + 유효여부/결과수치 칼럼)
 
-### `Test/` 폴더 (학습 과정 + 이전 파일)
-- `Day1_step1.py` ~ `Day5.py` — 학습 연습 파일
-- `json_to_sqlite.py` — JSON → SQLite 일회성 변환 도구 (사용 완료)
-- `환자DB.json` — 이전 JSON 데이터 (SQLite 전환 전 사용)
-- `curriculum.md` — 학습 커리큘럼
-
-### 문서
+### 폴더
+- `backup/` — DB 백업 파일
+- `research_output/` — 그래프/CSV 저장
+- `Test/` — 학습 연습 파일 + `seed_dummy.py` (더미 데이터 초기화 스크립트)
+- `AI 프롬프트/` — AI_역할_정리_v6.md
 - `학습내용 정리/` — Day별 학습일지
-- `프로젝트 요약/` — 프로젝트 요약 문서
+
+## DB 구조 (6개 테이블)
+- 환자 (환자id, 이름, 생년월일, 성별, 가족력, 약부작용이력)
+- 방문 (방문id, 환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약, 분석완료, 유효여부, 정정사유)
+- 진단 (진단id, 환자id, 방문id, 진단명, 상태, 비고, 표준코드, 유효여부, 정정사유)
+- 검사결과 (검사id, 환자id, 검사시행일, 검사항목, 결과값, 결과수치, 단위, 참고범위, 유효여부, 정정사유)
+- 영상검사 (영상id, 환자id, 검사시행일, 검사종류, 결과요약, 주요수치, 유효여부, 정정사유)
+- 추적계획 (추적id, 환자id, 방문id, 예정일, 내용, 완료여부, 유효여부, 정정사유)
+
+## 의무기록 원칙
+- 수정: 원본 보존(유효여부=0) + 정정 기록 추가(유효여부=1) + 정정사유 기록
+- 삭제: 실제 삭제 안 함, 유효여부=0으로 무효 처리 (환자 전체 삭제만 예외)
+- AI는 영향받는 이후 차트를 찾아서 안내만 (자동 수정 금지)
+- 조회/통계: 유효여부=1만 사용
+
+## 보안
+- API 전송 시 환자 익명화 (anonymizer.py) — 이름→랜덤ID, 생년월일→나이대
+- `.env`에 API 키 분리
+- `backup/`, `seed_dummy.py` 등 `.gitignore` 처리
 
 ## 코딩 규칙
 - 한글 변수명 사용 (예: `환자목록`, `혈압판정`, `수축기`)
