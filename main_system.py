@@ -12,7 +12,7 @@ from util import (
 )
 
 from briefing_generator import 브리핑생성
-from chart_analyzer import 차트분석, 분석결과_확인, 분석결과_저장
+from chart_analyzer import 차트분석_저장_전체흐름
 from research_module import 연구검색, 통계분석_자동, 통계분석_단계별
 from backup import DB백업
 from datetime import datetime
@@ -40,16 +40,7 @@ if 미분석:
                 continue
 
             print(f"  free-text: {free_text[:100]}{'...' if len(free_text) > 100 else ''}")
-            print("  AI 분석 중...")
-            분석결과 = 차트분석(차트["환자id"], free_text, 차트["방문일"])
-            if not 분석결과:
-                print("  분석 실패, 다음에 다시 시도합니다.")
-                continue
-
-            확인결과 = 분석결과_확인(분석결과)
-            if 확인결과:
-                저장건수 = 분석결과_저장(차트["환자id"], 차트["방문id"], 확인결과)
-                print(f"  → {저장건수}건 저장 완료!")
+            _, _ = 차트분석_저장_전체흐름(차트["환자id"], 차트["방문id"], free_text, 차트["방문일"])
             분석완료처리(차트["방문id"])
             print(f"  → 분석완료 처리됨")
         print("")
@@ -274,57 +265,19 @@ while True:
                     print(" 입력된 내용이 없습니다.\n")
                     continue
 
-                print("\n AI 분석 중...")
-                분석결과 = 차트분석(환자id, free_text, 방문일)
+                # 방문기록 먼저 생성 (free-text + 분석완료=0)
+                방문id = 방문기록추가(
+                    환자id, 방문일, None, None, None, None, None, None,
+                    "", "", "", free_text, "", 분석완료=0
+                )
 
-                if not 분석결과:
-                    방문id = 방문기록추가(
-                        환자id, 방문일, None, None, None, None, None, None,
-                        "", "", "", free_text, "", 분석완료=0
-                    )
-                    print("\n ⚠ AI 분석에 실패했습니다.")
-                    print("   입력하신 차트는 free-text로 먼저 저장되었습니다.")
-                    print("   다음 접속 시 AI가 자동으로 분석을 시도합니다.\n")
-                    continue
+                # 분석 → 제안 → 수정 → 저장 전체 흐름
+                _, 저장건수 = 차트분석_저장_전체흐름(환자id, 방문id, free_text, 방문일)
 
-                확인결과 = 분석결과_확인(분석결과)
-                if not 확인결과:
-                    print("\n 저장할 항목이 없습니다.\n")
-                    continue
-
-                방문id = None
-                활력 = 확인결과.get("활력징후", {})
-                생활 = 확인결과.get("생활습관", {})
-                처방 = 확인결과.get("처방요약", "")
-
-                if 활력:
-                    수축기 = int(활력["수축기"]) if 활력.get("수축기") else None
-                    이완기 = int(활력["이완기"]) if 활력.get("이완기") else None
-                    심박수 = int(활력["심박수"]) if 활력.get("심박수") else None
-                    키 = float(활력["키"]) if 활력.get("키") else None
-                    몸무게 = float(활력["몸무게"]) if 활력.get("몸무게") else None
-                    BMI = round(몸무게 / ((키 / 100) ** 2), 1) if 키 and 몸무게 else None
-                    방문id = 방문기록추가(
-                        환자id, 방문일, 수축기, 이완기, 심박수,
-                        키, 몸무게, BMI,
-                        생활.get("흡연", ""), 생활.get("음주", ""), 생활.get("운동", ""),
-                        free_text, 처방
-                    )
-                    if 수축기 and 이완기:
-                        판정 = 혈압판정(수축기, 이완기)
-                        print(f"\n → 방문기록 저장: BP {수축기}/{이완기} ({판정}), BMI {BMI}")
-                    else:
-                        print(f"\n → 방문기록 저장 (BP 미측정, BMI {BMI})")
+                if 저장건수 == 0:
+                    print("\n 저장된 항목이 없습니다.\n")
                 else:
-                    방문id = 방문기록추가(
-                        환자id, 방문일, None, None, None, None, None, None,
-                        생활.get("흡연", ""), 생활.get("음주", ""), 생활.get("운동", ""),
-                        free_text, 처방
-                    )
-                    print(f"\n → 방문기록 저장 (free-text)")
-
-                저장건수 = 분석결과_저장(환자id, 방문id, 확인결과)
-                print(f"\n 차트 입력 완료! (총 {저장건수 + 1}건 저장)\n")
+                    print(f"\n 차트 입력 완료!\n")
 
             # --- 3. 수정 ---
             elif 환자메뉴 == "3":
