@@ -115,6 +115,40 @@ def DB연결():
         )
     """)
 
+    # ---- 7. 처방 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 처방 (
+            처방id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문id INTEGER,
+            약품명 TEXT,
+            성분명 TEXT,
+            용량 TEXT,
+            용법 TEXT,
+            일수 INTEGER,
+            유효여부 INTEGER DEFAULT 1,
+            정정사유 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
+            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+        )
+    """)
+
+    # ---- 8. 검사처방 테이블 ----
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS 검사처방 (
+            처방검사id INTEGER PRIMARY KEY AUTOINCREMENT,
+            환자id INTEGER,
+            방문id INTEGER,
+            검사명 TEXT,
+            처방일 TEXT,
+            시행여부 INTEGER DEFAULT 0,
+            유효여부 INTEGER DEFAULT 1,
+            정정사유 TEXT,
+            FOREIGN KEY (환자id) REFERENCES 환자(환자id),
+            FOREIGN KEY (방문id) REFERENCES 방문(방문id)
+        )
+    """)
+
     # 기존 DB에 없는 칼럼 추가 (ALTER TABLE)
     기존_칼럼_추가 = [
         ("방문",    "분석완료",  "INTEGER DEFAULT 1"),
@@ -427,6 +461,16 @@ def 환자전체기록조회(환자id):
                ORDER BY 예정일""", (환자id,)
         ).fetchall()
 
+        처방목록 = conn.execute(
+            "SELECT * FROM 처방 WHERE 환자id = ? AND 유효여부 = 1 ORDER BY 처방id DESC",
+            (환자id,)
+        ).fetchall()
+
+        검사처방목록 = conn.execute(
+            "SELECT * FROM 검사처방 WHERE 환자id = ? AND 유효여부 = 1 ORDER BY 처방일 DESC",
+            (환자id,)
+        ).fetchall()
+
         return {
             "환자": dict(환자),
             "방문": [dict(행) for 행 in 방문목록],
@@ -434,6 +478,8 @@ def 환자전체기록조회(환자id):
             "검사결과": [dict(행) for 행 in 검사목록],
             "영상검사": [dict(행) for 행 in 영상목록],
             "추적계획": [dict(행) for 행 in 추적목록],
+            "처방": [dict(행) for 행 in 처방목록],
+            "검사처방": [dict(행) for 행 in 검사처방목록],
         }
     finally:
         conn.close()
@@ -822,6 +868,8 @@ def 환자삭제(환자id):
     conn = DB연결()
     try:
         with conn:
+            conn.execute("DELETE FROM 검사처방 WHERE 환자id = ?", (환자id,))
+            conn.execute("DELETE FROM 처방 WHERE 환자id = ?", (환자id,))
             conn.execute("DELETE FROM 추적계획 WHERE 환자id = ?", (환자id,))
             conn.execute("DELETE FROM 영상검사 WHERE 환자id = ?", (환자id,))
             conn.execute("DELETE FROM 검사결과 WHERE 환자id = ?", (환자id,))
@@ -948,6 +996,172 @@ def 추적계획완료(추적id):
             conn.execute(
                 "UPDATE 추적계획 SET 완료여부 = 1 WHERE 추적id = ?",
                 (추적id,)
+            )
+        return True
+    finally:
+        conn.close()
+
+
+# ============================================
+# 처방 CRUD
+# ============================================
+def 처방추가(환자id, 방문id, 약품명, 성분명="", 용량="", 용법="", 일수=0):
+    """처방을 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            cursor = conn.execute(
+                """INSERT INTO 처방 (환자id, 방문id, 약품명, 성분명, 용량, 용법, 일수, 유효여부)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                (환자id, 방문id, 약품명, 성분명, 용량, 용법, 일수)
+            )
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def 처방조회(환자id):
+    """유효한 처방 목록을 반환한다."""
+    conn = DB연결()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM 처방 WHERE 환자id = ? AND 유효여부 = 1 ORDER BY 처방id DESC",
+            (환자id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def 처방수정(처방id, 수정할항목, 새값, 정정사유=""):
+    """처방을 원본 보존 + 정정 방식으로 수정한다. 새 처방id 반환."""
+    허용항목 = ["약품명", "성분명", "용량", "용법", "일수"]
+    if 수정할항목 not in 허용항목:
+        return None
+    conn = DB연결()
+    try:
+        기존 = conn.execute(
+            "SELECT * FROM 처방 WHERE 처방id = ? AND 유효여부 = 1", (처방id,)
+        ).fetchone()
+        if not 기존:
+            return None
+        기존 = dict(기존)
+        with conn:
+            conn.execute(
+                "UPDATE 처방 SET 유효여부 = 0, 정정사유 = ? WHERE 처방id = ?",
+                (정정사유, 처방id)
+            )
+            새레코드 = dict(기존)
+            새레코드[수정할항목] = 새값
+            cursor = conn.execute(
+                """INSERT INTO 처방 (환자id, 방문id, 약품명, 성분명, 용량, 용법, 일수, 유효여부)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                (새레코드['환자id'], 새레코드['방문id'], 새레코드['약품명'],
+                 새레코드['성분명'], 새레코드['용량'], 새레코드['용법'], 새레코드['일수'])
+            )
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def 처방삭제(처방id, 삭제사유=""):
+    """처방을 무효화한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE 처방 SET 유효여부 = 0, 정정사유 = ? WHERE 처방id = ?",
+                (삭제사유, 처방id)
+            )
+        return True
+    finally:
+        conn.close()
+
+
+# ============================================
+# 검사처방 CRUD
+# ============================================
+def 검사처방추가(환자id, 방문id, 검사명, 처방일):
+    """검사처방을 추가한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            cursor = conn.execute(
+                """INSERT INTO 검사처방 (환자id, 방문id, 검사명, 처방일, 시행여부, 유효여부)
+                   VALUES (?, ?, ?, ?, 0, 1)""",
+                (환자id, 방문id, 검사명, 처방일)
+            )
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def 검사처방조회(환자id):
+    """유효한 검사처방 목록을 반환한다."""
+    conn = DB연결()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM 검사처방 WHERE 환자id = ? AND 유효여부 = 1 ORDER BY 처방일 DESC",
+            (환자id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def 검사처방수정(처방검사id, 수정할항목, 새값, 정정사유=""):
+    """검사처방을 원본 보존 + 정정 방식으로 수정한다. 새 처방검사id 반환."""
+    허용항목 = ["검사명", "처방일"]
+    if 수정할항목 not in 허용항목:
+        return None
+    conn = DB연결()
+    try:
+        기존 = conn.execute(
+            "SELECT * FROM 검사처방 WHERE 처방검사id = ? AND 유효여부 = 1", (처방검사id,)
+        ).fetchone()
+        if not 기존:
+            return None
+        기존 = dict(기존)
+        with conn:
+            conn.execute(
+                "UPDATE 검사처방 SET 유효여부 = 0, 정정사유 = ? WHERE 처방검사id = ?",
+                (정정사유, 처방검사id)
+            )
+            새레코드 = dict(기존)
+            새레코드[수정할항목] = 새값
+            cursor = conn.execute(
+                """INSERT INTO 검사처방 (환자id, 방문id, 검사명, 처방일, 시행여부, 유효여부)
+                   VALUES (?, ?, ?, ?, ?, 1)""",
+                (새레코드['환자id'], 새레코드['방문id'], 새레코드['검사명'],
+                 새레코드['처방일'], 새레코드['시행여부'])
+            )
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def 검사처방삭제(처방검사id, 삭제사유=""):
+    """검사처방을 무효화한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE 검사처방 SET 유효여부 = 0, 정정사유 = ? WHERE 처방검사id = ?",
+                (삭제사유, 처방검사id)
+            )
+        return True
+    finally:
+        conn.close()
+
+
+def 검사처방_시행완료(처방검사id):
+    """검사처방의 시행여부를 1(시행완료)로 변경한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE 검사처방 SET 시행여부 = 1 WHERE 처방검사id = ?",
+                (처방검사id,)
             )
         return True
     finally:
