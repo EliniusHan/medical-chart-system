@@ -13,6 +13,7 @@ from util import (
     처방추가, 검사처방추가,
 )
 from anonymizer import api_익명화, api_복원
+from public_db import 처방_안전성_조회, pubmed_검색
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -176,6 +177,31 @@ SYSTEM_PROMPT = """당신은 내과 전문의의 진료 어시스턴트입니다
 - 의사가 이미 조치를 취한 것 → 다시 권장하지 마세요
 - 의사가 언급하지 않은 검사, 의뢰, 주의사항만 제안하세요
 
+검토 의견 제시 시:
+- 근거가 되는 가이드라인을 반드시 명시하세요.
+  예: '🔴 LDL 145, 목표 미달 [ESC/EAS 2023, 고위험군 <100]'
+- DUR에서 금기 사항이 발견되면 반드시 포함하세요.
+  예: '⚖ 병용금기 발견: gemfibrozil + rosuvastatin [DUR]'
+- PubMed 논문이 관련 있으면 근거로 포함하세요.
+  예: '📚 PubMed: High-intensity statin... (NEJM 2023)'
+- 급여 정보가 있으면 처방 관련 제안에 명시하세요.
+  예: '💡 rosuvastatin 증량 권장 [급여: 고위험군 LDL 100 이상 — 충족]'
+- 이전 방문 데이터와 비교하여 악화/개선 추세가 있으면 명시하세요.
+  예: '📈 LDL 3회 연속 상승 추세 (94 → 120 → 145)'
+
+검토 의견 출력 형식 예시:
+  {"icon": "💡", "content": "rosuvastatin 증량 권장",
+   "reason": "LDL 145 목표 미달 [ESC/EAS 2023] / 급여: 충족 / DUR: 병용금기 없음",
+   "chart_text": "LDL 목표 미달로 rosuvastatin 증량 고려."}
+
+  {"icon": "⚖", "content": "병용금기 발견",
+   "reason": "gemfibrozil + rosuvastatin [DUR 병용금기]",
+   "chart_text": "DUR 확인 결과 gemfibrozil과 rosuvastatin 병용금기로 확인되어 처방 조정 필요."}
+
+  {"icon": "💡", "content": "경동맥 초음파 권장",
+   "reason": "심혈관 위험인자 다수 / 📚 PubMed: Carotid IMT predicts CV events (JACC 2022)",
+   "chart_text": "경동맥 초음파 시행하여 죽상경화 평가 예정."}
+
 각 제안에 차트에 삽입할 문구(chart_text)도 함께 생성하세요.
 제안할 것이 없으면 빈 배열 [] 출력.
 
@@ -294,6 +320,92 @@ def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
 
 
 # ============================================================
+# 공공 DB 조회 헬퍼 (차트분析 내부용)
+# ============================================================
+
+# 흔한 내과 진단명 → 영문 변환 테이블
+_진단명_영문 = {
+    "고혈압": "hypertension",
+    "고지혈증": "dyslipidemia",
+    "당뇨": "diabetes mellitus",
+    "당뇨전단계": "prediabetes",
+    "갑상선기능저하증": "hypothyroidism",
+    "갑상선기능항진증": "hyperthyroidism",
+    "통풍": "gout",
+    "골다공증": "osteoporosis",
+    "만성콩팥병": "chronic kidney disease",
+    "심방세동": "atrial fibrillation",
+    "심부전": "heart failure",
+    "관상동맥질환": "coronary artery disease",
+    "뇌졸중": "stroke",
+    "빈혈": "anemia",
+    "지방간": "fatty liver",
+}
+
+
+def _free_text에서_약품명_추출(free_text):
+    """free-text에서 약품명 패턴 간단 추출 (영문 소문자 + 숫자mg 조합).
+    완벽하지 않아도 됨 — AI가 나중에 정확히 추출함."""
+    import re
+    패턴 = r'\b[a-z]{4,}(?:\s*\d+\s*mg)?\b'
+    후보 = re.findall(패턴, free_text.lower())
+    제외목록 = {"with", "that", "this", "from", "have", "been", "will", "also",
+               "than", "more", "less", "after", "before", "normal", "blood",
+               "free", "text", "note", "plan", "done", "left", "right"}
+    seen = set()
+    약품목록 = []
+    for w in 후보:
+        w = w.strip()
+        if w not in seen and w not in 제외목록:
+            seen.add(w)
+            약품목록.append(w)
+        if len(약품목록) >= 5:
+            break
+    return 약품목록
+
+
+def _free_text에서_pubmed_검색어_추출(free_text):
+    """free-text에서 진단명을 찾아 영문 검색어 생성."""
+    for 한글, 영문 in _진단명_영문.items():
+        if 한글 in free_text:
+            return f"{영문} treatment guideline"
+    return None
+
+
+def _공공DB_조회(free_text):
+    """처방 안전성(DUR/e약은요/급여) + PubMed 조회.
+    Returns: (공공DB결과_문자열, 조회성공여부)"""
+    try:
+        약품목록 = _free_text에서_약품명_추출(free_text)
+        검색어 = _free_text에서_pubmed_검색어_추출(free_text)
+
+        안전성결과 = 처방_안전성_조회(약품목록) if 약품목록 else {}
+        pubmed결과 = pubmed_검색(검색어) if 검색어 else []
+
+        dur_정보 = {약품: v["dur"] for 약품, v in 안전성결과.items()}
+        약품정보 = {약품: v["약품정보"] for 약품, v in 안전성결과.items()}
+        급여정보 = {약품: v["급여정보"] for 약품, v in 안전성결과.items()}
+
+        조회결과 = (
+            "[공공 DB 조회 결과 — 참고하여 검토 의견에 반영하세요]\n\n"
+            "[DUR 정보]\n" + json.dumps(dur_정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[약품 정보 (e약은요)]\n" + json.dumps(약품정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[급여 정보]\n" + json.dumps(급여정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[PubMed 검색 결과]\n" + json.dumps(pubmed결과, ensure_ascii=False, indent=2) + "\n\n"
+            "위 정보를 검토 의견(💡), 법적 확인(⚖), 설명의무에 활용하세요.\n"
+            "DUR에서 병용금기가 발견되면 반드시 ⚖ 법적 확인사항에 포함하세요.\n"
+            "PubMed 논문은 관련 있는 것만 검토 의견에 포함하세요.\n"
+            "급여 정보가 있으면 처방 관련 제안에 급여 여부를 명시하세요."
+        )
+
+        return 조회결과, True
+
+    except Exception as e:
+        print(f"  ⚠ 공공 DB 조회 실패: {e}")
+        return "[공공 DB 조회 결과 — 조회 실패 또는 해당 정보 없음. 내부 지식으로 판단하세요.]", False
+
+
+# ============================================================
 # Step 2: 1번째 API — 분석 + 추출 + 제안
 # ============================================================
 def 차트분석(환자id, free_text, 방문일=None):
@@ -310,6 +422,11 @@ def 차트분석(환자id, free_text, 방문일=None):
     if 나이 is not None:
         기록["환자"]["나이"] = f"{나이}세"
 
+    # 공공 DB 조회 (AI API 호출 전)
+    공공DB_문자열, 조회성공 = _공공DB_조회(free_text)
+    if not 조회성공:
+        print("  ⚠ 공공 DB 조회 실패. AI 내부 지식으로 검토합니다.")
+
     익명기록, 매핑 = api_익명화(기록)
     랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
     실제이름 = 매핑.get(랜덤id) if 랜덤id else None
@@ -321,6 +438,8 @@ def 차트분석(환자id, free_text, 방문일=None):
 [이 차트의 방문일: {방문일}]
 [오늘 free-text]
 {익명_free_text}
+
+{공공DB_문자열}
 
 위 free-text를 분석하여 기존 데이터와 비교한 뒤, 지정된 JSON 형식으로 출력하세요."""
 
