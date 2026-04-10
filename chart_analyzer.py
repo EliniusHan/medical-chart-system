@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from util import (
     환자전체기록조회, 나이계산,
-    방문기록수정,
+    방문기록_일괄수정,
     진단추가, 검사결과추가, 영상검사추가, 추적계획추가,
     환자정보수정,
     처방추가, 검사처방추가,
@@ -756,39 +756,37 @@ def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
     """승인된 항목을 유형별로 테이블에 저장. Returns: 저장건수"""
     저장건수 = 0
 
-    # --- free_text 저장 ---
-    if final_free_text:
-        방문기록수정(방문id, "free_text", final_free_text)
-        저장건수 += 1
-        print(f"  → free_text 저장 완료")
-
-    # --- 활력징후 → 방문 테이블 ---
+    # --- 방문 테이블 일괄 업데이트 (free_text, 활력징후, 생활습관, 처방요약) ---
+    # 방문기록수정()을 여러 번 호출하면 매번 새 레코드가 생성되므로
+    # 한 번의 UPDATE로 처리하여 불필요한 레코드 복사 방지
+    방문_업데이트 = {}
     vitals = approved_data.get("vitals", {})
-    필드매핑 = [("수축기", "수축기"), ("이완기", "이완기"), ("심박수", "심박수"),
-               ("키", "키"), ("몸무게", "몸무게"), ("BMI", "BMI")]
-    for 영문, 한글 in 필드매핑:
-        if vitals.get(영문) is not None:
-            방문기록수정(방문id, 한글, vitals[영문])
-            저장건수 += 1
-    if vitals:
-        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
-        print(f"  → 활력징후 저장: {bp}")
-
-    # --- 생활습관 → 방문 테이블 ---
     lifestyle = approved_data.get("lifestyle", {})
+    ps = approved_data.get("prescription_summary", "")
+
+    if final_free_text:
+        방문_업데이트["free_text"] = final_free_text
+    for 필드 in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"]:
+        if vitals.get(필드) is not None:
+            방문_업데이트[필드] = vitals[필드]
     for 필드 in ["흡연", "음주", "운동"]:
         if lifestyle.get(필드):
-            방문기록수정(방문id, 필드, lifestyle[필드])
-            저장건수 += 1
-    if lifestyle:
-        print(f"  → 생활습관 저장 완료")
-
-    # --- 처방요약 → 방문 테이블 ---
-    ps = approved_data.get("prescription_summary", "")
+            방문_업데이트[필드] = lifestyle[필드]
     if ps:
-        방문기록수정(방문id, "처방요약", ps)
+        방문_업데이트["처방요약"] = ps
+
+    if 방문_업데이트:
+        방문기록_일괄수정(방문id, 방문_업데이트)
         저장건수 += 1
-        print(f"  → 처방요약 저장: {ps[:40]}{'...' if len(ps) > 40 else ''}")
+        if final_free_text:
+            print(f"  → free_text 저장 완료")
+        if vitals:
+            bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+            print(f"  → 활력징후 저장: {bp}")
+        if lifestyle:
+            print(f"  → 생활습관 저장 완료")
+        if ps:
+            print(f"  → 처방요약 저장: {ps[:40]}{'...' if len(ps) > 40 else ''}")
 
     # --- 진단 ---
     for d in approved_data.get("diagnoses", []):

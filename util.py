@@ -363,15 +363,49 @@ def 미분석차트조회():
         conn.close()
 
 
-def 분석완료처리(방문id):
-    """방문 기록의 분석완료를 1로 업데이트한다."""
+def 분析완료처리(방문id):
+    """방문 기록의 분析완료를 1로 업데이트한다.
+    방문기록수정() 호출 시 id가 변경될 수 있으므로
+    원본 방문id로 환자id+방문일을 조회하여 유효 레코드를 갱신한다."""
     conn = DB연결()
     try:
+        # 원본 id로 환자id+방문일 조회 (유효여부 무관)
+        원본 = conn.execute(
+            "SELECT 환자id, 방문일 FROM 방문 WHERE 방문id = ?", (방문id,)
+        ).fetchone()
+        if not 원본:
+            return
         with conn:
-            conn.execute("UPDATE 방문 SET 분석완료 = 1 WHERE 방문id = ?", (방문id,))
+            conn.execute(
+                "UPDATE 방문 SET 분析완료 = 1 WHERE 환자id = ? AND 방문일 = ? AND 유효여부 = 1",
+                (원본["환자id"], 원본["방문일"])
+            )
     finally:
         conn.close()
 
+
+def 방문기록_일괄수정(방문id, 필드dict):
+    """AI 분析 최초 저장 시 방문 테이블의 여러 필드를 한 번에 UPDATE.
+    정정 이력 없이 단순 UPDATE — 불필요한 레코드 복사 방지.
+    의사 수동 정정은 기존 방문기록수정() 사용.
+    Returns: True/False"""
+    허용필드 = {"수축기", "이완기", "심박수", "키", "몸무게", "BMI",
+               "흡연", "음주", "운동", "free_text", "처방요약"}
+    업데이트할 = {k: v for k, v in 필드dict.items() if k in 허용필드 and v is not None}
+    if not 업데이트할:
+        return False
+    set절 = ", ".join(f"{k} = ?" for k in 업데이트할)
+    값들 = list(업데이트할.values()) + [방문id]
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                f"UPDATE 방문 SET {set절} WHERE 방문id = ? AND 유효여부 = 1",
+                값들
+            )
+        return True
+    finally:
+        conn.close()
 
 def 환자목록_정렬():
     """전체 환자를 이름순 정렬하고, 동명이인을 표시하여 출력한다."""
