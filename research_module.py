@@ -10,6 +10,7 @@ from anthropic import Anthropic
 import pandas as pd
 import matplotlib
 from anonymizer import api_익명화, api_복원
+from public_db import api_재시도
 matplotlib.rcParams['font.family'] = 'AppleGothic'
 matplotlib.rcParams['axes.unicode_minus'] = False
 
@@ -37,13 +38,15 @@ def _strip_codeblock(text):
     return text
 
 def _call_api(system, user, max_tokens=4096, temperature=0.1):
-    응답 = client.messages.create(
+    응답 = api_재시도(lambda: client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tokens,
         temperature=temperature,
         system=system,
         messages=[{"role": "user", "content": user}]
-    )
+    ))
+    if not 응답:
+        return None
     return 응답.content[0].text.strip()
 
 DB_SCHEMA = """DB 구조:

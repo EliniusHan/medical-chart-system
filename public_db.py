@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import json
 import sqlite3
@@ -9,6 +10,28 @@ load_dotenv()
 DATA_GO_KR_KEY = os.getenv("DATA_GO_KR_API_KEY")
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY", "")
 DB경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
+
+
+# ─────────────────────────────────────────────
+# 공통 재시도 래퍼
+# ─────────────────────────────────────────────
+
+def api_재시도(호출함수, 최대시도=3, 대기초=5):
+    """외부 API 호출을 재시도하는 래퍼.
+    호출함수: 인자 없는 lambda 또는 함수.
+    실패 시 None 반환."""
+    for 시도 in range(최대시도):
+        try:
+            return 호출함수()
+        except Exception as e:
+            에러명 = type(e).__name__
+            if 시도 < 최대시도 - 1:
+                대기 = 대기초 * (시도 + 1)
+                print(f"  [재시도] {에러명} — {대기}초 후 재시도 ({시도+1}/{최대시도})...")
+                time.sleep(대기)
+            else:
+                print(f"  [오류] {에러명} — 최대 재시도 횟수 초과")
+                return None
 
 
 # ─────────────────────────────────────────────
@@ -25,25 +48,13 @@ def dur_조회(약품명):
 
     결과 = {"병용금기": [], "임부금기": [], "연령금기": [], "용량주의": []}
 
-    def _get_with_retry(url, params, 오류레이블):
-        """timeout=10, 실패 시 1회 재시도"""
-        for 시도 in range(2):
-            try:
-                응답 = requests.get(url, params=params, timeout=10)
-                if 응답.status_code == 200:
-                    return 응답
-            except Exception as e:
-                if 시도 == 1:
-                    print(f"  [{오류레이블}] {e}")
-        return None
-
-    # 병용금기 조회
-    응답 = _get_with_retry(
+    # 병용금기 조회 (네트워크 오류 시 재시도, 4xx는 재시도 안 함)
+    응답 = api_재시도(lambda: requests.get(
         f"{기본URL}/getUsjntTabooInfoList03",
-        {"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
-        "DUR 병용금기 조회 오류"
-    )
-    if 응답:
+        params={"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
+        timeout=10
+    ))
+    if 응답 and 응답.status_code == 200:
         items = 응답.json().get("body", {}).get("items", [])
         if isinstance(items, list):
             for item in items:
@@ -53,12 +64,12 @@ def dur_조회(약품명):
                 })
 
     # 임부금기 조회
-    응답 = _get_with_retry(
+    응답 = api_재시도(lambda: requests.get(
         f"{기본URL}/getPwnmTabooInfoList03",
-        {"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
-        "DUR 임부금기 조회 오류"
-    )
-    if 응답:
+        params={"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
+        timeout=10
+    ))
+    if 응답 and 응답.status_code == 200:
         items = 응답.json().get("body", {}).get("items", [])
         if isinstance(items, list):
             for item in items:
@@ -79,32 +90,22 @@ def 약품정보_조회(약품명):
     Returns: dict with keys: 효능, 사용법, 주의사항, 부작용, 상호작용
     조회 실패 시 빈 dict 반환."""
 
-    try:
-        응답 = requests.get(
-            "http://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList",
-            params={
-                "serviceKey": DATA_GO_KR_KEY,
-                "itemName": 약품명,
-                "type": "json",
-                "numOfRows": "1"
-            },
-            timeout=5
-        )
-        if 응답.status_code == 200:
-            data = 응답.json()
-            items = data.get("body", {}).get("items", [])
-            if items and isinstance(items, list):
-                item = items[0]
-                return {
-                    "효능": item.get("efcyQesitm", ""),
-                    "사용법": item.get("useMethodQesitm", ""),
-                    "주의사항": item.get("atpnQesitm", ""),
-                    "부작용": item.get("seQesitm", ""),
-                    "상호작용": item.get("intrcQesitm", "")
-                }
-    except Exception as e:
-        print(f"  [e약은요 조회 오류] {e}")
-
+    응답 = api_재시도(lambda: requests.get(
+        "http://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList",
+        params={"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "1"},
+        timeout=10
+    ))
+    if 응답 and 응답.status_code == 200:
+        items = 응답.json().get("body", {}).get("items", [])
+        if items and isinstance(items, list):
+            item = items[0]
+            return {
+                "효능": item.get("efcyQesitm", ""),
+                "사용법": item.get("useMethodQesitm", ""),
+                "주의사항": item.get("atpnQesitm", ""),
+                "부작용": item.get("seQesitm", ""),
+                "상호작용": item.get("intrcQesitm", "")
+            }
     return {}
 
 
@@ -196,59 +197,44 @@ def pubmed_검색(검색어, 최대건수=3):
     Returns: list of dict with keys: 제목, 저널, 연도, PMID, 링크"""
 
     결과 = []
-    try:
-        # API 키가 있을 때만 파라미터에 포함
-        api_key_param = {"api_key": PUBMED_API_KEY} if PUBMED_API_KEY else {}
+    # API 키가 있을 때만 파라미터에 포함
+    api_key_param = {"api_key": PUBMED_API_KEY} if PUBMED_API_KEY else {}
 
-        # Step 1: 검색 (esearch)
-        검색응답 = requests.get(
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-            params={
-                "db": "pubmed",
-                "term": 검색어,
-                "retmax": 최대건수,
-                "sort": "relevance",
-                "retmode": "json",
-                **api_key_param
-            },
-            timeout=5
-        )
-        if 검색응답.status_code != 200:
-            return 결과
+    # Step 1: 검색 (esearch)
+    검색응답 = api_재시도(lambda: requests.get(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        params={"db": "pubmed", "term": 검색어, "retmax": 최대건수,
+                "sort": "relevance", "retmode": "json", **api_key_param},
+        timeout=10
+    ))
+    if not 검색응답 or 검색응답.status_code != 200:
+        return 결과
 
-        ids = 검색응답.json().get("esearchresult", {}).get("idlist", [])
-        if not ids:
-            return 결과
+    ids = 검색응답.json().get("esearchresult", {}).get("idlist", [])
+    if not ids:
+        return 결과
 
-        # Step 2: 상세 정보 (esummary)
-        상세응답 = requests.get(
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
-            params={
-                "db": "pubmed",
-                "id": ",".join(ids),
-                "retmode": "json",
-                **api_key_param
-            },
-            timeout=5
-        )
-        if 상세응답.status_code != 200:
-            return 결과
+    # Step 2: 상세 정보 (esummary)
+    상세응답 = api_재시도(lambda: requests.get(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+        params={"db": "pubmed", "id": ",".join(ids), "retmode": "json", **api_key_param},
+        timeout=10
+    ))
+    if not 상세응답 or 상세응답.status_code != 200:
+        return 결과
 
-        결과데이터 = 상세응답.json().get("result", {})
-        for pmid in ids:
-            논문 = 결과데이터.get(pmid, {})
-            if not 논문:
-                continue
-            결과.append({
-                "제목": 논문.get("title", ""),
-                "저널": 논문.get("source", ""),
-                "연도": 논문.get("pubdate", "")[:4],
-                "PMID": pmid,
-                "링크": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-            })
-    except Exception as e:
-        print(f"  [PubMed 검색 오류] {e}")
-
+    결과데이터 = 상세응답.json().get("result", {})
+    for pmid in ids:
+        논문 = 결과데이터.get(pmid, {})
+        if not 논문:
+            continue
+        결과.append({
+            "제목": 논문.get("title", ""),
+            "저널": 논문.get("source", ""),
+            "연도": 논문.get("pubdate", "")[:4],
+            "PMID": pmid,
+            "링크": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        })
     return 결과
 
 

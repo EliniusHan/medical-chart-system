@@ -13,7 +13,7 @@ from util import (
     처방추가, 검사처방추가,
 )
 from anonymizer import api_익명화, api_복원
-from public_db import 처방_안전성_조회, pubmed_검색
+from public_db import 처방_안전성_조회, pubmed_검색, api_재시도
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -316,13 +316,15 @@ def _parse_json_response(text):
 
 def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
     """익명화된 프롬프트로 API 호출 후 복원. Returns: 응답텍스트 or None"""
-    응답 = client.messages.create(
+    응답 = api_재시도(lambda: client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tokens,
         temperature=0.1,
         system=system,
         messages=[{"role": "user", "content": 프롬프트}]
-    )
+    ))
+    if not 응답:
+        return None
     텍스트 = api_복원(응답.content[0].text.strip(), 매핑)
     return 텍스트
 

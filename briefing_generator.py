@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from util import 환자전체기록조회, 나이계산
 from anonymizer import api_익명화, api_복원
+from public_db import api_재시도
 
 load_dotenv()
 
@@ -145,7 +146,7 @@ def 브리핑생성(환자id):
     # API 전송 전 익명화
     익명기록, 매핑 = api_익명화(기록)
 
-    응답 = client.messages.create(
+    응답 = api_재시도(lambda: client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2048,
         temperature=0.1,
@@ -153,9 +154,12 @@ def 브리핑생성(환자id):
         messages=[
             {"role": "user", "content": f"다음 환자의 브리핑을 작성해주세요.\n\n{json.dumps(익명기록, ensure_ascii=False, indent=2)}"}
         ]
-    )
+    ))
 
     # 응답 복원 후 매핑 폐기
+    if not 응답:
+        매핑 = None
+        return None
     브리핑 = api_복원(응답.content[0].text, 매핑)
     매핑 = None
     return 브리핑
