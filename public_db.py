@@ -21,57 +21,51 @@ def dur_조회(약품명):
     각 항목은 {'금기약품': '', '사유': ''} 형태.
     조회 실패 시 빈 dict 반환."""
 
-    기본URL = "http://apis.data.go.kr/1471000/DURPrdlstInfoService03"
+    기본URL = "https://apis.data.go.kr/1471000/DURPrdlstInfoService03"
 
     결과 = {"병용금기": [], "임부금기": [], "연령금기": [], "용량주의": []}
 
+    def _get_with_retry(url, params, 오류레이블):
+        """timeout=10, 실패 시 1회 재시도"""
+        for 시도 in range(2):
+            try:
+                응답 = requests.get(url, params=params, timeout=10)
+                if 응답.status_code == 200:
+                    return 응답
+            except Exception as e:
+                if 시도 == 1:
+                    print(f"  [{오류레이블}] {e}")
+        return None
+
     # 병용금기 조회
-    try:
-        응답 = requests.get(
-            f"{기본URL}/getUsjntTabooInfoList03",
-            params={
-                "serviceKey": DATA_GO_KR_KEY,
-                "itemName": 약품명,
-                "type": "json",
-                "numOfRows": "10"
-            },
-            timeout=5
-        )
-        if 응답.status_code == 200:
-            data = 응답.json()
-            items = data.get("body", {}).get("items", [])
-            if isinstance(items, list):
-                for item in items:
-                    결과["병용금기"].append({
-                        "금기약품": item.get("MIXTURE_ITEM_NAME", ""),
-                        "사유": item.get("PROHBT_CONTENT", "")
-                    })
-    except Exception as e:
-        print(f"  [DUR 병용금기 조회 오류] {e}")
+    응답 = _get_with_retry(
+        f"{기본URL}/getUsjntTabooInfoList03",
+        {"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
+        "DUR 병용금기 조회 오류"
+    )
+    if 응답:
+        items = 응답.json().get("body", {}).get("items", [])
+        if isinstance(items, list):
+            for item in items:
+                결과["병용금기"].append({
+                    "금기약품": item.get("MIXTURE_ITEM_NAME", ""),
+                    "사유": item.get("PROHBT_CONTENT", "")
+                })
 
     # 임부금기 조회
-    try:
-        응답 = requests.get(
-            f"{기본URL}/getPwnmTabooInfoList03",
-            params={
-                "serviceKey": DATA_GO_KR_KEY,
-                "itemName": 약품명,
-                "type": "json",
-                "numOfRows": "10"
-            },
-            timeout=5
-        )
-        if 응답.status_code == 200:
-            data = 응답.json()
-            items = data.get("body", {}).get("items", [])
-            if isinstance(items, list):
-                for item in items:
-                    결과["임부금기"].append({
-                        "등급": item.get("GRADE_NM", ""),
-                        "사유": item.get("PROHBT_CONTENT", "")
-                    })
-    except Exception as e:
-        print(f"  [DUR 임부금기 조회 오류] {e}")
+    응답 = _get_with_retry(
+        f"{기본URL}/getPwnmTabooInfoList03",
+        {"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "10"},
+        "DUR 임부금기 조회 오류"
+    )
+    if 응답:
+        items = 응답.json().get("body", {}).get("items", [])
+        if isinstance(items, list):
+            for item in items:
+                결과["임부금기"].append({
+                    "등급": item.get("GRADE_NM", ""),
+                    "사유": item.get("PROHBT_CONTENT", "")
+                })
 
     return 결과
 
@@ -167,8 +161,22 @@ def 급여정보_조회(약품명):
     conn = sqlite3.connect(DB경로)
     conn.row_factory = sqlite3.Row
     try:
+        # 실제 칼럼명 동적 탐색 (CSV마다 다를 수 있음)
+        칼럼들 = conn.execute("PRAGMA table_info(약가마스터)").fetchall()
+        칼럼명목록 = [c[1] for c in 칼럼들]
+
+        제품명칼럼 = None
+        for 칼럼 in 칼럼명목록:
+            if any(k in 칼럼 for k in ["한글상품명", "제품명", "품목명", "약품명", "상품명"]):
+                제품명칼럼 = 칼럼
+                break
+
+        if not 제품명칼럼:
+            print(f"  [약가마스터] 제품명 칼럼을 찾을 수 없음. 칼럼 목록: {칼럼명목록[:10]}...")
+            return []
+
         rows = conn.execute(
-            "SELECT * FROM 약가마스터 WHERE 제품명 LIKE ? LIMIT 5",
+            f'SELECT * FROM 약가마스터 WHERE [{제품명칼럼}] LIKE ? LIMIT 5',
             (f"%{약품명}%",)
         ).fetchall()
         return [dict(r) for r in rows]
