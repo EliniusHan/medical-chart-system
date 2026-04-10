@@ -130,10 +130,13 @@ def 약가DB_초기화():
         return True
 
     # CSV 파일 자동 탐색 (약가, 약품, 마스터 키워드)
+    # macOS HFS+는 한글 파일명을 NFD로 저장하므로 NFC 정규화 후 비교
+    import unicodedata
     프로젝트폴더 = os.path.dirname(os.path.abspath(__file__))
     csv파일 = None
     for f in os.listdir(프로젝트폴더):
-        if f.endswith(".csv") and any(k in f for k in ["약가", "약품", "마스터"]):
+        f_nfc = unicodedata.normalize("NFC", f)
+        if f_nfc.endswith(".csv") and any(k in f_nfc for k in ["약가", "약품", "마스터"]):
             csv파일 = os.path.join(프로젝트폴더, f)
             break
 
