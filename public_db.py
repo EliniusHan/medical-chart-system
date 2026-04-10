@@ -91,7 +91,7 @@ def 약품정보_조회(약품명):
     조회 실패 시 빈 dict 반환."""
 
     응답 = api_재시도(lambda: requests.get(
-        "http://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList",
+        "https://apis.data.go.kr/1471000/DrbEasyDrugInfoService/getDrbEasyDrugList",
         params={"serviceKey": DATA_GO_KR_KEY, "itemName": 약품명, "type": "json", "numOfRows": "1"},
         timeout=10
     ))
