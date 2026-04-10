@@ -252,6 +252,38 @@ def pubmed_검색(검색어, 최대건수=3):
     return 결과
 
 
+# 영문 성분명 → 한글 변환 테이블 (급여정보 조회용)
+# 약가마스터 DB는 한글상품명에 성분명이 괄호로 포함되어 있어 한글로 검색해야 매칭됨
+_영문_한글_성분명 = {
+    "amlodipine": "암로디핀",
+    "losartan": "로사르탄",
+    "valsartan": "발사르탄",
+    "telmisartan": "텔미사르탄",
+    "olmesartan": "올메사르탄",
+    "rosuvastatin": "로수바스타틴",
+    "atorvastatin": "아토르바스타틴",
+    "pitavastatin": "피타바스타틴",
+    "metformin": "메트포르민",
+    "glimepiride": "글리메피리드",
+    "sitagliptin": "시타글립틴",
+    "dapagliflozin": "다파글리플로진",
+    "empagliflozin": "엠파글리플로진",
+    "levothyroxine": "레보티록신",
+    "allopurinol": "알로푸리놀",
+    "febuxostat": "페북소스타트",
+    "warfarin": "와파린",
+    "aspirin": "아스피린",
+    "clopidogrel": "클로피도그렐",
+    "bisoprolol": "비소프롤롤",
+    "carvedilol": "카르베딜롤",
+    "furosemide": "푸로세미드",
+    "spironolactone": "스피로노락톤",
+    "omeprazole": "오메프라졸",
+    "lansoprazole": "란소프라졸",
+    "esomeprazole": "에소메프라졸",
+}
+
+
 # ─────────────────────────────────────────────
 # 6. 통합 조회 함수
 # ─────────────────────────────────────────────
@@ -266,9 +298,11 @@ def 처방_안전성_조회(약품명목록):
         약품명 = 약품명.strip()
         if not 약품명:
             continue
+        # 급여정보는 한글 검색이 필요 — 영문 성분명이면 한글로 변환
+        급여검색어 = _영문_한글_성분명.get(약품명.lower(), 약품명)
         결과[약품명] = {
             "dur": dur_조회(약품명),
             "약품정보": 약품정보_조회(약품명),
-            "급여정보": 급여정보_조회(약품명)
+            "급여정보": 급여정보_조회(급여검색어)
         }
     return 결과
