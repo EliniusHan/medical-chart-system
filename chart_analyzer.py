@@ -109,6 +109,14 @@ _EXTRACTION_RULES = """
   예: '**약 2개월' → 기존 처방 목록 참조, 동일 약품, 일수=60, 추적계획 ❌
   처방요약 칸은 전체 처방 내용 텍스트 요약으로 유지.
 
+  '유지' 처방도 반드시 추출하세요.
+  매 방문마다 처방된 약은 신규/변경/유지 관계없이 전부 추출.
+  구분 필드로 구분:
+    신규 처방 → 구분: '신규'
+    용량/용법 변경 → 구분: '변경감지'
+    기존과 동일 유지 → 구분: '유지'
+  '유지' 처방도 테이블에 저장하여 매 방문마다 처방 이력이 남도록 합니다.
+
 검사처방 추출 규칙:
   날짜 있는 ** 뒤에 검사 내용 → 검사처방(처방일=YYMM00) + 추적계획(예정일=YYMM00)
 
@@ -575,7 +583,7 @@ def _추출데이터_요약표시(extraction):
         목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
         print(f"  [영상검사] {목록}")
 
-    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") != "기존참조"]
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
     if prescriptions:
         목록 = " / ".join(
             f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
@@ -656,7 +664,7 @@ def _추출데이터_항목별_승인(extraction):
             approved["imaging"] = imaging
 
     # 처방
-    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") != "기존참조"]
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
     if prescriptions:
         목록 = " / ".join(
             f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"

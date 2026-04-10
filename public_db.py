@@ -8,7 +8,7 @@ load_dotenv()
 
 DATA_GO_KR_KEY = os.getenv("DATA_GO_KR_API_KEY")
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY", "")
-DB경로 = os.path.join(os.path.dirname(__file__), "환자DB.db")
+DB경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 
 
 # ─────────────────────────────────────────────
@@ -130,7 +130,7 @@ def 약가DB_초기화():
         return True
 
     # CSV 파일 자동 탐색 (약가, 약품, 마스터 키워드)
-    프로젝트폴더 = os.path.dirname(__file__)
+    프로젝트폴더 = os.path.dirname(os.path.abspath(__file__))
     csv파일 = None
     for f in os.listdir(프로젝트폴더):
         if f.endswith(".csv") and any(k in f for k in ["약가", "약품", "마스터"]):
@@ -160,6 +160,7 @@ def 급여정보_조회(약품명):
     """약품명으로 급여 여부와 상한금액을 조회한다.
     Returns: list of dict with keys: 제품명, 급여구분, 상한금액 (CSV 칼럼에 따라 다를 수 있음)
     조회 실패 시 빈 list 반환."""
+    약가DB_초기화()
     conn = sqlite3.connect(DB경로)
     conn.row_factory = sqlite3.Row
     try:
