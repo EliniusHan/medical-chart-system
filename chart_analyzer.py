@@ -279,13 +279,6 @@ def _parse_json_response(text):
         return None
 
 
-def _편집입력(현재문구):
-    """편집 모드: 현재 문구 표시 후 새 문구를 한 줄로 입력 받는다.
-    빈 줄 입력 시 원본 유지."""
-    print(f"   현재: {현재문구}")
-    새문구 = input("   수정본 입력 (빈 줄 = 원본 유지): ").strip()
-    return 새문구 if 새문구 else 현재문구
-
 
 def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
     """익명화된 프롬프트로 API 호출 후 복원. Returns: 응답텍스트 or None"""
@@ -365,11 +358,8 @@ def 제안확인(분석결과):
             chart_text = s.get("chart_text", "")
             if chart_text:
                 print(f"     제안: \"{chart_text}\"")
-            응답 = input("     → 차트에 반영할까요? (y/n/편집): ").strip().lower()
-            if 응답 == "y" and chart_text:
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
                 approved_texts.append(chart_text)
-            elif 응답 == "편집":
-                approved_texts.append(_편집입력(chart_text))
 
     # ── 법적 확인사항 (⚖) ──
     if legal:
@@ -379,11 +369,8 @@ def 제안확인(분석결과):
             chart_text = l.get("chart_text", "")
             if chart_text:
                 print(f"     제안: \"{chart_text}\"")
-            응답 = input("     → 차트에 반영할까요? (y/n/편집): ").strip().lower()
-            if 응답 == "y" and chart_text:
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
                 approved_texts.append(chart_text)
-            elif 응답 == "편집":
-                approved_texts.append(_편집입력(chart_text))
 
     # ── 설명의무 기록 ──
     ic_text = informed_consent.get("chart_text", "")
@@ -394,11 +381,8 @@ def 제안확인(분석결과):
         if drugs:
             print(f"   약물: {drugs}  |  부작용: {se}")
         print(f"   제안: \"{ic_text}\"")
-        응답 = input("   → 차트에 반영할까요? (y/n/편집): ").strip().lower()
-        if 응답 == "y":
+        if input("   → 차트에 반영할까요? (y/n): ").strip().lower() == "y":
             approved_texts.append(ic_text)
-        elif 응답 == "편집":
-            approved_texts.append(_편집입력(ic_text))
 
     return extraction, approved_texts
 
