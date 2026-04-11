@@ -677,14 +677,18 @@ DB 연결: import sqlite3; conn = sqlite3.connect(r'{DB경로}')
 결과값 변환: pd.to_numeric(..., errors='coerce')"""
 
 통계방법_목록 = """사용 가능한 통계 방법:
-  1. 기술통계 (평균, 중앙값, 표준편차)
-  2. t-test (두 그룹 평균 비교)
-  3. paired t-test (같은 환자 전후 비교)
-  4. chi-square (범주형 비교)
-  5. ANOVA (세 그룹 이상 비교)
-  6. 상관분석 (두 변수 관계)
-  7. 회귀분석
-  8. AI 추천 수락"""
+  1. 기술통계 (Descriptive Statistics) — 평균, 중앙값, 표준편차, 사분위수, 분포 요약
+  2. 독립표본 t-test (Independent t-test) — 두 독립 그룹의 평균 비교 (예: 남 vs 여)
+  3. 대응표본 t-test (Paired t-test) — 같은 환자의 전후 비교 (예: 치료 전 vs 후)
+  4. 카이제곱 검정 (Chi-square test) — 범주형 변수의 그룹 간 비율 비교
+  5. 일원분산분석 (One-way ANOVA) — 세 그룹 이상의 평균 비교 + Tukey 사후검정
+  6. 크루스칼-왈리스 검정 (Kruskal-Wallis test) — 비정규분포 다중 그룹 비교
+  7. 상관분석 (Correlation) — 두 연속변수 간 관계 (Pearson/Spearman)
+  8. 선형회귀분석 (Linear Regression) — 독립변수가 종속변수에 미치는 영향
+  9. 로지스틱회귀분석 (Logistic Regression) — 이진 결과 예측 (예: 목표 달성 여부)
+  10. 생존분석 (Kaplan-Meier) — 시간에 따른 이벤트 발생 분석
+  11. 시각화만 (Visualization only) — 히스토그램, 박스플롯, 산점도 등
+  12. AI 추천 수락"""
 
 
 def _단계_확인(ai_제안, 단계명, 프롬프트="진행(y) / 수정사항 입력: "):
@@ -753,7 +757,7 @@ def 통계분석_단계별():
             # 목록을 직접 보고 싶을 때만 표시
             print(통계방법_목록)
             번호 = input(" 번호를 선택하세요: ").strip()
-            if 번호.isdigit() and 1 <= int(번호) <= 8:
+            if 번호.isdigit() and 1 <= int(번호) <= 12:
                 선택방법 = 통계방법_목록.split("\n")[int(번호)].strip()
                 제안 = _ai_제안(대화기록, f"통계 방법 '{선택방법}'을 사용하는 방향으로 분석 계획을 수정해주세요.")
             else:
