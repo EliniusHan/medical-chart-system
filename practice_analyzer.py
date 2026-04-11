@@ -12,8 +12,10 @@ load_dotenv()
 DB경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# 의사패턴 요약 캐시 (프로세스 내 재사용)
+# 의사패턴 요약 캐시 (10분 유효)
 _패턴요약_캐시 = None
+_패턴요약_캐시_시간 = None
+_캐시_유효기간_초 = 600
 
 
 def _오늘날짜_YYMMDD():
@@ -74,8 +76,8 @@ def 데일리_SQL체크():
     conn.row_factory = sqlite3.Row
 
     try:
-        # ── 1. 추적계획 지연 환자 ──────────────────────────
-        rows = conn.execute("""
+        # ── 1+3. 추적계획 1번 조회 후 Python에서 분류 ─────
+        추적rows = conn.execute("""
             SELECT t.예정일, t.내용, p.이름
             FROM 추적계획 t
             JOIN 환자 p ON t.환자id = p.환자id
@@ -85,10 +87,9 @@ def 데일리_SQL체크():
               AND t.예정일 != ''
         """).fetchall()
 
-        for row in rows:
+        for row in 추적rows:
             if _YYMM00_만료여부(row["예정일"]):
                 예정일str = str(row["예정일"])
-                # 경과 개월 계산 (근사치)
                 try:
                     if 예정일str.endswith("00"):
                         기준연월 = int("20" + 예정일str[:2]) * 12 + int(예정일str[2:4])
@@ -103,6 +104,10 @@ def 데일리_SQL체크():
                     경과표시 = "기간 계산 불가"
                 메시지들.append(
                     f"⚠ 추적 지연: {row['이름']} — {row['내용']} 예정 {row['예정일']} ({경과표시})"
+                )
+            elif _YYMMDD_이번주여부(row["예정일"]):
+                메시지들.append(
+                    f"📅 이번 주 예정: {row['이름']} — {row['내용']} 예정 {row['예정일']}"
                 )
 
         # ── 2. 검사처방 미시행 ────────────────────────────
@@ -120,23 +125,6 @@ def 데일리_SQL체크():
             if _YYMM00_만료여부(row["처방일"]):
                 메시지들.append(
                     f"⚠ 미시행 검사: {row['이름']} — {row['검사명']} 처방일 {row['처방일']}"
-                )
-
-        # ── 3. 이번 주 예정 환자 ──────────────────────────
-        rows = conn.execute("""
-            SELECT t.예정일, t.내용, p.이름
-            FROM 추적계획 t
-            JOIN 환자 p ON t.환자id = p.환자id
-            WHERE t.완료여부 = 0
-              AND t.유효여부 = 1
-              AND t.예정일 IS NOT NULL
-              AND t.예정일 != ''
-        """).fetchall()
-
-        for row in rows:
-            if _YYMMDD_이번주여부(row["예정일"]):
-                메시지들.append(
-                    f"📅 이번 주 예정: {row['이름']} — {row['내용']} 예정 {row['예정일']}"
                 )
 
     except Exception as e:
@@ -433,9 +421,11 @@ def 의사패턴_요약생성():
     """차트 분석 시 AI 프롬프트에 포함할 의사 패턴 요약을 생성한다.
     SQL만으로 생성 (API 불필요). 캐시하여 재사용.
     Returns: str (프롬프트에 삽입할 텍스트)"""
-    global _패턴요약_캐시
-    if _패턴요약_캐시 is not None:
-        return _패턴요약_캐시
+    global _패턴요약_캐시, _패턴요약_캐시_시간
+    if _패턴요약_캐시 is not None and _패턴요약_캐시_시간 is not None:
+        경과 = (datetime.now() - _패턴요약_캐시_시간).total_seconds()
+        if 경과 < _캐시_유효기간_초:
+            return _패턴요약_캐시
 
     conn = sqlite3.connect(DB경로)
     conn.row_factory = sqlite3.Row
@@ -490,4 +480,5 @@ def 의사패턴_요약생성():
 
     요약텍스트 = "[의사 진료 패턴 요약]\n" + "\n".join([f" {항목}" for 항목 in 항목들])
     _패턴요약_캐시 = 요약텍스트
+    _패턴요약_캐시_시간 = datetime.now()
     return 요약텍스트

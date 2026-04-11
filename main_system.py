@@ -2,7 +2,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*urllib3.*")
 
-# 의료 차트 시스템 (SQLite 6개 테이블 기반)
+# 의료 차트 시스템 (SQLite 8개 테이블 기반)
 from util import (
     혈압판정, 숫자입력, 실수입력, 나이계산, 통계보기,
     환자등록, 환자검색, 환자목록가져오기, 환자목록_정렬,
@@ -497,7 +497,7 @@ while True:
 
                 # ---- 1. 환자 전체 삭제 (실제 삭제) ----
                 if 대상 == 1:
-                    확인 = input(f" ⚠ '{기록['환자']['이름']}' 환자의 모든 기록(6개 테이블)이 삭제됩니다. 계속? (yes): ").strip()
+                    확인 = input(f" ⚠ '{기록['환자']['이름']}' 환자의 모든 기록(8개 테이블)이 삭제됩니다. 계속? (yes): ").strip()
                     if 확인 == "yes":
                         환자삭제(환자id)
                         print(" -> 환자 및 모든 관련 기록 삭제 완료!\n")
