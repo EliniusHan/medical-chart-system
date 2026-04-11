@@ -439,17 +439,8 @@ def _run_stat_code(code):
     finally:
         sys.stdout = old_stdout
 
-    # 실제 저장된 파일 확인 (주입한 경로 또는 폴더 내 최신 파일)
-    그래프경로 = None
-    if os.path.exists(graph_path):
-        그래프경로 = graph_path
-    elif os.path.exists(OUTPUT_DIR):
-        png파일들 = sorted(
-            [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png") or f.endswith(".jpg")],
-            key=lambda f: os.path.getmtime(os.path.join(OUTPUT_DIR, f))
-        )
-        if png파일들:
-            그래프경로 = os.path.join(OUTPUT_DIR, png파일들[-1])
+    # 주입한 경로에 파일이 실제로 저장됐을 때만 반환
+    그래프경로 = graph_path if os.path.exists(graph_path) else None
 
     return stdout_buf.getvalue(), None, 그래프경로
 
@@ -696,10 +687,10 @@ DB 연결: import sqlite3; conn = sqlite3.connect(r'{DB경로}')
   8. AI 추천 수락"""
 
 
-def _단계_확인(ai_제안, 단계명):
+def _단계_확인(ai_제안, 단계명, 프롬프트="진행(y) / 수정사항 입력: "):
     """AI 제안을 출력하고 y/수정사항 입력받기. y면 True와 None, 수정사항이면 False와 내용 반환."""
     print(f"\n [AI 제안 — {단계명}]\n{ai_제안}\n")
-    응답 = input(" 승인하시겠습니까? (y / 수정사항 입력): ").strip()
+    응답 = input(f" {프롬프트}").strip()
     if 응답.lower() == "y":
         return True, None
     return False, 응답
@@ -738,13 +729,31 @@ def 통계분석_단계별():
         제안 = _ai_제안(대화기록, f"수정 요청: {수정}. 다시 데이터 선택을 제안해주세요.")
 
     # Step 2: 그룹 설정
+    그룹설정_목록 = """그룹 설정 방법:
+  1. 두 그룹 비교 (예: 치료군 vs 대조군)
+  2. 전후 비교 (같은 환자, 치료 전/후)
+  3. 단일 그룹 (그룹 구분 없음, 기술통계)
+  4. 세 그룹 이상 비교
+  5. AI 추천 수락"""
+
     print("\n Step 2: 그룹 설정 중...")
     제안 = _ai_제안(대화기록, "그룹 설정 방법을 추천해주세요. (예: A군 vs B군, 전후 비교 등)")
     while True:
-        승인, 수정 = _단계_확인(제안, "그룹 설정")
-        if 승인:
-            break
-        제안 = _ai_제안(대화기록, f"수정 요청: {수정}. 다시 그룹 설정을 제안해주세요.")
+        print(f"\n [AI 제안 — 그룹 설정]\n{제안}\n")
+        print(그룹설정_목록)
+        응답 = input(" 번호 선택 / 수정사항 입력: ").strip()
+        if 응답.isdigit() and 1 <= int(응답) <= 5:
+            선택 = 그룹설정_목록.split("\n")[int(응답)].strip()
+            if 선택.startswith("5"):
+                # AI 추천 수락
+                break
+            제안 = _ai_제안(대화기록, f"그룹 설정 '{선택}'으로 분석 계획을 구체화해주세요.")
+            승인, 수정 = _단계_확인(제안, "그룹 설정 확정")
+            if 승인:
+                break
+            제안 = _ai_제안(대화기록, f"수정 요청: {수정}. 다시 그룹 설정을 제안해주세요.")
+        else:
+            제안 = _ai_제안(대화기록, f"수정 요청: {응답}. 다시 그룹 설정을 제안해주세요.")
 
     # Step 3: 통계 기법 선택
     print(f"\n Step 3: 통계 기법 선택 중...")
@@ -768,24 +777,24 @@ def 통계분석_단계별():
             # 텍스트 수정 요청 → AI가 수정 제안 → 다시 루프 상단으로 (목록 미표시)
             제안 = _ai_제안(대화기록, f"수정 요청: {응답}. 통계 기법을 재추천해주세요.")
 
-    # Step 4: 코드 생성 및 실행
+    # Step 4: 코드 생성 및 실행 (STAT_SYSTEM 사용 — JSON 형식 강제)
     print("\n Step 4: 분석 코드 생성 중...")
-    코드응답 = _ai_제안(대화기록,
-        "지금까지 논의된 내용을 바탕으로 완전한 분석 JSON을 생성해주세요. "
-        "free_text 분석이 필요한 경우 analysis_type='freetext'와 freetext_query 필드를 포함하세요. "
-        f"정형 분석 형식: {{\"sql\": \"...\", \"method\": \"...\", \"code\": \"...\", "
-        f"\"explanation\": {{\"data_selection\": \"...\", \"grouping\": \"...\", "
-        f"\"method_reason\": \"...\", \"result_interpretation\": \"...\"}}}}  "
-        f"free_text 분석 형식: {{\"sql\": \"후보추림SQL\", \"analysis_type\": \"freetext\", "
-        f"\"freetext_query\": \"...\", \"method\": \"freetext content analysis\", \"code\": \"\"}}  "
-        "순수 JSON만 출력.")
+    대화요약 = "\n".join(f"[{m['role']}] {m['content']}" for m in 대화기록)
+    코드생성_프롬프트 = f"""지금까지 의사와 논의한 분석 설계:
+
+{대화요약}
+
+위 내용을 바탕으로 완전한 분석 JSON을 생성하세요.
+반드시 순수 JSON만 출력. 설명 텍스트나 마크다운 없이."""
+
+    코드응답 = _call_api(STAT_SYSTEM, 코드생성_프롬프트, max_tokens=4096)
 
     계획 = _parse_stat_response(코드응답)
     if not 계획:
         # JSON 파싱 실패 시 재시도
         print(" JSON 파싱 재시도 중...")
-        계획 = _parse_stat_response(_call_api(STEP_SYSTEM,
-            "방금 논의한 분석 계획을 JSON으로만 출력해주세요. 마크다운 없이 순수 JSON."))
+        계획 = _parse_stat_response(_call_api(STAT_SYSTEM,
+            f"다음 분석 설계를 JSON으로만 출력해주세요. 마크다운 없이 순수 JSON.\n\n{대화요약}"))
 
     if not 계획:
         print(" ⚠ 분석 계획 생성 실패\n")
@@ -797,6 +806,11 @@ def 통계분석_단계별():
         return
 
     code = 계획.get("code", "")
+    if not code.strip():
+        print(" ⚠ AI가 분석 코드를 생성하지 못했습니다.")
+        print(" 질문을 더 구체적으로 바꿔보세요.")
+        return
+
     print("\n 분석 실행 중...")
     출력, 오류, 그래프경로 = _run_stat_code(code)
 
