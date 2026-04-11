@@ -10,7 +10,7 @@ from anthropic import Anthropic
 import pandas as pd
 import matplotlib
 from anonymizer import api_익명화, api_복원
-from public_db import api_재시도
+from util import api_재시도
 matplotlib.rcParams['font.family'] = 'AppleGothic'
 matplotlib.rcParams['axes.unicode_minus'] = False
 

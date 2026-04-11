@@ -13,7 +13,8 @@ from util import (
     처방추가, 검사처방추가,
 )
 from anonymizer import api_익명화, api_복원
-from public_db import 처방_안전성_조회, pubmed_검색, api_재시도
+from public_db import 처방_안전성_조회, pubmed_검색
+from util import api_재시도
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))

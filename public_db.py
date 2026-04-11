@@ -1,37 +1,15 @@
 import os
-import time
 import requests
 import json
 import sqlite3
 from dotenv import load_dotenv
+from util import api_재시도
 
 load_dotenv()
 
 DATA_GO_KR_KEY = os.getenv("DATA_GO_KR_API_KEY")
 PUBMED_API_KEY = os.getenv("PUBMED_API_KEY", "")
 DB경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
-
-
-# ─────────────────────────────────────────────
-# 공통 재시도 래퍼
-# ─────────────────────────────────────────────
-
-def api_재시도(호출함수, 최대시도=3, 대기초=5):
-    """외부 API 호출을 재시도하는 래퍼.
-    호출함수: 인자 없는 lambda 또는 함수.
-    실패 시 None 반환."""
-    for 시도 in range(최대시도):
-        try:
-            return 호출함수()
-        except Exception as e:
-            에러명 = type(e).__name__
-            if 시도 < 최대시도 - 1:
-                대기 = 대기초 * (시도 + 1)
-                print(f"  [재시도] {에러명} — {대기}초 후 재시도 ({시도+1}/{최대시도})...")
-                time.sleep(대기)
-            else:
-                print(f"  [오류] {에러명} — 최대 재시도 횟수 초과")
-                return None
 
 
 # ─────────────────────────────────────────────

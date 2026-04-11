@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from util import 환자전체기록조회, 나이계산
 from anonymizer import api_익명화, api_복원
-from public_db import api_재시도
+from util import api_재시도
 
 load_dotenv()
 
