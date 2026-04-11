@@ -1,3 +1,7 @@
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*urllib3.*")
+
 # 의료 차트 시스템 (SQLite 6개 테이블 기반)
 from util import (
     혈압판정, 숫자입력, 실수입력, 나이계산, 통계보기,
