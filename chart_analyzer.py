@@ -11,10 +11,10 @@ from util import (
     진단추가, 검사결과추가, 영상검사추가, 추적계획추가,
     환자정보수정,
     처방추가, 검사처방추가,
+    api_재시도,
 )
 from anonymizer import api_익명화, api_복원
 from public_db import 처방_안전성_조회, pubmed_검색
-from util import api_재시도
 from practice_analyzer import 의사패턴_요약생성
 
 load_dotenv()
