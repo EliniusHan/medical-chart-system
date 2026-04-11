@@ -152,7 +152,7 @@ def 데일리_SQL체크():
 # ============================================
 
 PATTERN_SYSTEM = """당신은 내과 전문의의 진료 패턴 분석 어시스턴트입니다.
-아래는 의사의 전체 진료 데이터 요약입니다.
+아래는 의사의 전체 진료 데이터 요약과 환자별 상세 정보입니다.
 의학적으로 주목할 만한 패턴, 개선점, 주의사항을 자유롭게 분석하세요.
 
 분석 관점:
@@ -164,7 +164,27 @@ PATTERN_SYSTEM = """당신은 내과 전문의의 진료 패턴 분석 어시스
 
 구체적 숫자와 환자 수를 포함하여 분석하세요.
 개선이 필요한 항목은 구체적 행동 제안과 함께.
-문제 없는 항목은 언급하지 마세요."""
+문제 없는 항목은 언급하지 마세요.
+
+분석 시 문제가 있는 환자를 구체적으로 명시하세요.
+각 개선점마다 해당 환자 목록을 포함하세요.
+
+예시:
+
+**메트포르민 미처방 당뇨 환자 (6명):**
+  - 김OO (환자id: 12) — 당뇨 활성, glimepiride만 처방 중
+  - 박OO (환자id: 25) — 당뇨 활성, 처방 없음
+  - ...
+
+**PPI 중복 처방 의심 환자 (3명):**
+  - 이OO (환자id: 8) — 오메프라졸 + 판토프라졸 동시 처방
+  - ...
+
+**추적 지연 심각 환자 TOP 5 (경과 기간 순):**
+  - 한OO (환자id: 33) — 39개월 경과, Lab 재검 미이행
+  - ...
+
+모든 문제점에 대해 해당 환자를 빠짐없이 나열하세요."""
 
 
 def _DB_요약수집():
@@ -283,22 +303,106 @@ def _3개월전_YYMMDD():
     return 날짜.strftime("%y%m%d")
 
 
+def _나이대변환(생년월일str):
+    """생년월일(YYYY-MM-DD 또는 YYYYMMDD) → 나이대 문자열 반환. 예: '60대'"""
+    try:
+        생년월일str = 생년월일str.replace("-", "")
+        출생년도 = int(생년월일str[:4])
+        나이 = datetime.today().year - 출생년도
+        return f"{(나이 // 10) * 10}대"
+    except Exception:
+        return "나이미상"
+
+
+def _환자별_상세수집():
+    """환자별 진단 + 현재 처방 목록을 수집한다.
+    이름은 포함, 생년월일은 나이대로 변환.
+    Returns: list of dict"""
+    conn = sqlite3.connect(DB경로)
+    conn.row_factory = sqlite3.Row
+    환자목록 = []
+
+    try:
+        patients = conn.execute(
+            "SELECT 환자id, 이름, 생년월일, 성별 FROM 환자 ORDER BY 환자id"
+        ).fetchall()
+
+        for p in patients:
+            환자id = p["환자id"]
+
+            # 활성/의심 진단 목록
+            진단rows = conn.execute("""
+                SELECT 진단명, 상태
+                FROM 진단
+                WHERE 환자id = ? AND 유효여부 = 1
+                ORDER BY 진단id
+            """, (환자id,)).fetchall()
+            진단목록 = [f"{r['진단명']}({r['상태']})" for r in 진단rows]
+
+            # 현재 처방 (유효여부=1, 가장 최근 방문의 처방만)
+            처방rows = conn.execute("""
+                SELECT DISTINCT p.약품명, p.용량, p.용법
+                FROM 처방 p
+                JOIN 방문 v ON p.방문id = v.방문id
+                WHERE p.환자id = ? AND p.유효여부 = 1
+                  AND v.방문id = (
+                      SELECT MAX(방문id) FROM 방문
+                      WHERE 환자id = ? AND 유효여부 = 1
+                  )
+            """, (환자id, 환자id)).fetchall()
+            처방목록 = [f"{r['약품명']} {r['용량']} {r['용법']}" for r in 처방rows]
+
+            # 미완료 추적계획 (예정일 경과 포함)
+            추적rows = conn.execute("""
+                SELECT 예정일, 내용
+                FROM 추적계획
+                WHERE 환자id = ? AND 완료여부 = 0 AND 유효여부 = 1
+                ORDER BY 예정일
+            """, (환자id,)).fetchall()
+            미완료추적 = [f"{r['예정일']} {r['내용']}" for r in 추적rows]
+
+            환자목록.append({
+                "환자id": 환자id,
+                "이름": p["이름"],
+                "나이대": _나이대변환(p["생년월일"]),
+                "성별": p["성별"],
+                "진단": 진단목록,
+                "현재처방": 처방목록,
+                "미완료추적계획": 미완료추적,
+            })
+
+    except Exception as e:
+        환자목록.append({"오류": str(e)})
+    finally:
+        conn.close()
+
+    return 환자목록
+
+
 def AI_패턴분석():
-    """전체 DB 요약을 AI에게 보내서 자유롭게 패턴을 분석하게 한다.
+    """전체 DB 요약 + 환자별 상세 정보를 AI에게 보내서 패턴을 분석하게 한다.
     주 1회 또는 월 1회 실행 권장.
     Returns: str (AI 분석 결과) or None"""
     print("\n [DB 요약 수집 중...]")
     요약 = _DB_요약수집()
-    요약_json = json.dumps(요약, ensure_ascii=False, indent=2)
+
+    print(" [환자별 상세 정보 수집 중...]")
+    환자상세 = _환자별_상세수집()
+
+    전송데이터 = {
+        "통계요약": 요약,
+        "환자별상세": 환자상세,
+    }
+    전송_json = json.dumps(전송데이터, ensure_ascii=False, indent=2)
 
     print(" [AI 분석 중...]")
     응답 = api_재시도(lambda: client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2048,
+        max_tokens=4096,
         temperature=0.3,
         system=PATTERN_SYSTEM,
         messages=[
-            {"role": "user", "content": f"다음은 이 의원의 전체 진료 데이터 요약입니다. 분석해주세요.\n\n{요약_json}"}
+            {"role": "user", "content": f"다음은 이 의원의 전체 진료 데이터 요약과 환자별 상세 정보입니다. 분석해주세요.\n\n{전송_json}"}
         ]
     ))
 
