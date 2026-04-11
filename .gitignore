@@ -9,3 +9,4 @@ backup/
 research_output/
 *약가*.csv
 *마스터*.csv
+.claude/
