@@ -15,6 +15,7 @@ from util import (
 from anonymizer import api_익명화, api_복원
 from public_db import 처방_안전성_조회, pubmed_검색
 from util import api_재시도
+from practice_analyzer import 의사패턴_요약생성
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -443,6 +444,9 @@ def 차트분석(환자id, free_text, 방문일=None):
     실제이름 = 매핑.get(랜덤id) if 랜덤id else None
     익명_free_text = free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else free_text
 
+    패턴요약 = 의사패턴_요약생성()
+    패턴요약_섹션 = f"\n[의사 진료 패턴 — 참고하여 맥락에 맞는 검토 의견 제시에 활용]\n{패턴요약}\n" if 패턴요약 else ""
+
     프롬프트 = f"""[기존 환자 데이터]
 {json.dumps(익명기록, ensure_ascii=False, indent=2)}
 
@@ -450,8 +454,7 @@ def 차트분석(환자id, free_text, 방문일=None):
 [오늘 free-text]
 {익명_free_text}
 
-{공공DB_문자열}
-
+{공공DB_문자열}{패턴요약_섹션}
 위 free-text를 분석하여 기존 데이터와 비교한 뒤, 지정된 JSON 형식으로 출력하세요."""
 
     응답텍스트 = _익명화_api호출(SYSTEM_PROMPT, 프롬프트, 매핑)

@@ -19,6 +19,7 @@ from briefing_generator import 브리핑생성
 from chart_analyzer import 차트분석_저장_전체흐름
 from research_module import 연구검색, 통계분석_자동, 통계분석_단계별
 from backup import DB백업
+from practice_analyzer import 데일리_SQL체크, AI_패턴분석
 from datetime import datetime
 
 # 프로그램 시작
@@ -50,6 +51,14 @@ if 미분석:
         print("")
     else:
         print("  → 다음 접속 시 다시 물어봅니다.\n")
+
+# 데일리 인사이트 자동 실행
+인사이트 = 데일리_SQL체크()
+if 인사이트:
+    print("\n=== 오늘의 인사이트 ===")
+    for msg in 인사이트:
+        print(f"  {msg}")
+    print()
 
 
 # ============================================
@@ -206,10 +215,10 @@ def 전체이력출력(기록):
 # 메인 루프
 # ============================================
 while True:
-    print("\n명령어: 1.신환등록  2.환자목록  3.연구  4.끝")
+    print("\n명령어: 1.신환등록  2.환자목록  3.연구  4.인사이트  0.끝")
     명령 = input("선택: ").strip()
 
-    if 명령 in ("끝", "4"):
+    if 명령 in ("끝", "0"):
         print("프로그램을 종료합니다.")
         break
 
@@ -722,6 +731,35 @@ while True:
                 통계분석_자동()
             elif 도구 == 3:
                 통계분석_단계별()
+
+    # ============================================
+    # 인사이트
+    # ============================================
+    elif 명령 in ("인사이트", "4"):
+        print("\n 1. 데일리 체크 (SQL, 무료)")
+        print(" 2. AI 패턴 분석 (API 호출, 비용 발생)")
+        인사이트메뉴 = input(" 선택: ").strip()
+
+        if 인사이트메뉴 == "1":
+            결과 = 데일리_SQL체크()
+            if 결과:
+                print("\n=== 데일리 체크 결과 ===")
+                for msg in 결과:
+                    print(f"  {msg}")
+            else:
+                print("\n  특이사항 없음.")
+
+        elif 인사이트메뉴 == "2":
+            확인 = input("\n  API 비용이 발생합니다. 실행할까요? (y/n): ").strip().lower()
+            if 확인 == "y":
+                결과 = AI_패턴분석()
+                if 결과:
+                    print("\n=== AI 패턴 분석 결과 ===")
+                    print(결과)
+                else:
+                    print("\n  분석 실패.")
+        else:
+            print(" 알 수 없는 선택입니다.")
 
     else:
         print(" 알 수 없는 명령입니다.\n")
