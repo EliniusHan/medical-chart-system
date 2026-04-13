@@ -54,9 +54,14 @@ def _inject_css():
         font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     }
 
+    /* Streamlit 기본 헤더/푸터/Deploy 버튼 숨기기 */
+    header[data-testid="stHeader"] { display: none !important; }
+    footer { display: none !important; }
+    .stDeployButton { display: none !important; }
+
     /* 전체 레이아웃 */
     .main .block-container {
-        padding-top: 1.5rem;
+        padding-top: 1rem !important;
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 100% !important;
@@ -66,6 +71,7 @@ def _inject_css():
     section[data-testid="stSidebar"] > div:first-child {
         background-color: #1e2432;
         border-right: 1px solid #2d3550;
+        padding-top: 1rem !important;
     }
     /* 사이드바 텍스트 색상 */
     section[data-testid="stSidebar"] .stMarkdown p,
@@ -93,6 +99,10 @@ def _inject_css():
         background: #4f6ef7 !important;
         border-color: #4f6ef7 !important;
         color: white !important;
+    }
+    /* 사이드바 신환등록(primary) 버튼 텍스트 중앙 정렬 */
+    section[data-testid="stSidebar"] button[kind="primary"] p {
+        text-align: center !important;
     }
 
     /* 사이드바 환자 목록 버튼 좌측 정렬 */
@@ -357,11 +367,11 @@ def _render_sidebar():
 
         st.markdown("---")
 
-        # ── 환자 목록 (고정 높이 스크롤 컨테이너)
-        with st.container(height=500, border=False):
+        # ── 환자 목록 (스크롤 영역만 고정 높이)
+        with st.container(height=400, border=False):
             _render_patient_list(검색어)
 
-        # ── 하단 아이콘 행: ✏️ ⚙️ 🌐 🚪
+        # ── 하단 아이콘 행: ✏️ ⚙️ 🌐 🚪 (항상 고정)
         st.markdown("---")
         langs = ["한국어", "English", "Deutsch", "日本語"]
         c1, c2, c3, c4 = st.columns(4)
@@ -636,33 +646,30 @@ def _render_patient_detail(환자id: int):
     나이    = 나이계산(환자.get("생년월일"))
     성별    = 환자.get("성별", "")
     병록번호 = 환자.get("병록번호", "")
-    이니셜  = 이름[0] if 이름 else "?"
+    병록번호_숫자만 = 병록번호.replace("MRN-", "") if 병록번호 else ""
     활성진단 = [d["진단명"] for d in 기록.get("진단", []) if d.get("상태") in ("활성", "의심")]
     주진단표시 = ", ".join(활성진단[:3]) + ("…" if len(활성진단) > 3 else "") if 활성진단 else "진단 없음"
-    나이표시 = f"{나이}세" if 나이 is not None else "?"
+    나이표시 = str(나이) if 나이 is not None else "?"
 
     가족력_현재  = 환자.get("가족력", "")      or ""
     약부작용_현재 = 환자.get("약부작용이력", "") or ""
 
-    # ── 환자 헤더 (이름·병록번호·주진단)
+    # ── 환자 헤더 (컴팩트 2줄: 이름/번호/나이/성별/생년월일 + 주진단)
     st.markdown(f"""
-    <div class="patient-header">
-        <div class="initial-badge">{이니셜}</div>
+    <div class="patient-header" style="padding:12px 16px;margin-bottom:8px;">
         <div style="flex:1;">
-            <div style="font-size:18px;font-weight:700;">
-                {이름}
-                <span style="font-size:14px;font-weight:400;color:#6b7280;">
-                    ({나이표시}&nbsp;{성별})
-                </span>
+            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                <span style="font-size:18px;font-weight:700;color:#1f2937;">{이름}</span>
+                <span style="font-size:14px;color:#6b7280;">{병록번호_숫자만}</span>
+                <span style="font-size:14px;color:#6b7280;">{나이표시}/{성별}</span>
+                <span style="font-size:14px;color:#6b7280;">{환자.get('생년월일', '')}</span>
             </div>
-            <div style="font-size:13px;color:#6b7280;margin-top:2px;">{병록번호}</div>
             <div style="font-size:13px;color:#4f6ef7;margin-top:4px;">{주진단표시}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── 가족력/약부작용 — 헤더와 같은 배경색으로 바로 아래 연결
-    st.markdown('<div style="background:#eff2ff;border-radius:0 0 12px 12px;padding:8px 16px 12px;margin-top:-16px;margin-bottom:16px;">', unsafe_allow_html=True)
+    # ── 가족력/약부작용
     fc1, fc2 = st.columns(2)
     with fc1:
         fi_col, fb_col = st.columns([5, 1], vertical_alignment="bottom")
@@ -682,7 +689,6 @@ def _render_patient_detail(환자id: int):
                 환자정보수정(환자id, "약부작용이력", 약부작용_입력)
                 st.toast("약부작용이력 저장 완료")
                 st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
     col_left, col_right = st.columns([6, 4], gap="medium")
 
@@ -700,7 +706,6 @@ def _render_patient_detail(환자id: int):
 
     with col_right:
         with st.container(height=650, border=False):
-            st.markdown("### 📂 전체이력")
             _tab_history(기록)
 
 
@@ -737,6 +742,22 @@ def _tab_edit(환자id: int):
 
 def _tab_delete(환자id: int):
     st.info("🔧 추후 구현 — 기록 삭제\n\n`util.py` 삭제 함수들 연동 예정")
+
+
+def _날짜_정규화(날짜str) -> str:
+    """YYMMDD → YYYY-MM-DD 변환. 이미 YYYY-MM-DD면 그대로."""
+    if not 날짜str:
+        return ""
+    날짜str = str(날짜str).strip()
+    if len(날짜str) == 10 and "-" in 날짜str:
+        return 날짜str
+    if len(날짜str) == 6 and 날짜str.isdigit():
+        yy, mm, dd = 날짜str[:2], 날짜str[2:4], 날짜str[4:6]
+        yyyy = f"20{yy}"
+        if dd == "00":
+            return f"{yyyy}-{mm}"
+        return f"{yyyy}-{mm}-{dd}"
+    return 날짜str
 
 
 @st.dialog("진료 기록")
@@ -779,17 +800,17 @@ def _render_grouped_section(
 
     grouped: dict = {}
     for row in data:
-        날짜 = str(row.get(date_col, "") or "날짜 없음")
+        날짜 = _날짜_정규화(row.get(date_col, "")) or "날짜 없음"
         grouped.setdefault(날짜, []).append(row)
 
     for 날짜 in sorted(grouped.keys(), reverse=True):
         rows = grouped[날짜]
         if show_visit_btn:
-            날짜_col, 버튼_col = st.columns([4, 1])
+            날짜_col, 버튼_col = st.columns([5, 1])
             with 날짜_col:
                 st.markdown(f"**{날짜}**")
             with 버튼_col:
-                if st.button("기록보기", key=f"visit_{section_key}_{날짜}", type="secondary"):
+                if st.button("보기", key=f"visit_{section_key}_{날짜}", help="진료 기록 보기", type="secondary"):
                     _show_visit_record(rows[0])
         else:
             st.markdown(f"**{날짜}**")
@@ -808,12 +829,12 @@ def _render_grouped_section(
 
 
 def _tab_history(기록: dict):
-    """환자 전체이력 — 항목별/날짜별 탭으로 표시한다."""
-    tab_항목, tab_날짜 = st.tabs(["📑 항목별 정렬", "📅 날짜별 정렬"])
-    with tab_항목:
-        _history_by_category(기록)
+    """환자 전체이력 — 날짜별/항목별 탭으로 표시한다."""
+    tab_날짜, tab_항목 = st.tabs(["📅 날짜별 정렬", "📑 항목별 정렬"])
     with tab_날짜:
         _history_by_date(기록)
+    with tab_항목:
+        _history_by_category(기록)
 
 
 def _history_by_category(기록: dict):
@@ -826,6 +847,23 @@ def _history_by_category(기록: dict):
             if not 행.get("방문일") and 행.get("방문id"):
                 행["방문일"] = 방문일_매핑.get(행["방문id"], "")
 
+    # 검사처방 분류: 당일/시행완료 → 검사처방, 미래 → 추적계획으로 이동
+    당일검사처방 = []
+    미래검사처방 = []
+    for o in 기록.get("검사처방", []):
+        방문일_원본 = 방문일_매핑.get(o.get("방문id"), "")
+        처방일_원본 = str(o.get("처방일", ""))
+        방문일_비교 = 방문일_원본.replace("-", "")[2:] if len(방문일_원본) == 10 else 방문일_원본
+        if 처방일_원본 == 방문일_비교 or o.get("시행여부") == 1:
+            당일검사처방.append(o)
+        else:
+            o["_미래검사"] = True
+            미래검사처방.append(o)
+
+    기록_표시용 = dict(기록)
+    기록_표시용["검사처방"] = 당일검사처방
+    기록_표시용["추적계획"] = list(기록.get("추적계획", [])) + 미래검사처방
+
     sections = [
         ("🏥 방문 기록",  "방문",     "방문일",    ["수축기","이완기","심박수","키","몸무게","BMI","흡연","음주","운동","처방요약"]),
         ("🔬 진단",       "진단",     "방문일",    ["진단명","상태","비고","표준코드"]),
@@ -837,7 +875,7 @@ def _history_by_category(기록: dict):
     ]
 
     for title, key, date_col, display_cols in sections:
-        data = 기록.get(key, [])
+        data = 기록_표시용.get(key, [])
         is_first = key in ("방문", "진단")
         is_방문 = key == "방문"
         with st.expander(f"{title} ({len(data)}건)", expanded=is_first):
@@ -860,31 +898,40 @@ def _history_by_date(기록: dict):
     날짜별: dict = {}
 
     for v in 기록.get("방문", []):
-        날짜 = v.get("방문일", "")
+        날짜 = _날짜_정규화(v.get("방문일", ""))
         날짜별.setdefault(날짜, _빈항목())["방문"].append(v)
 
     for d in 기록.get("진단", []):
-        날짜 = d.get("방문일") or 방문일_매핑.get(d.get("방문id"), "")
+        날짜 = _날짜_정규화(d.get("방문일") or 방문일_매핑.get(d.get("방문id"), ""))
         날짜별.setdefault(날짜, _빈항목())["진단"].append(d)
 
     for lr in 기록.get("검사결과", []):
-        날짜 = lr.get("검사시행일", "")
+        날짜 = _날짜_정규화(lr.get("검사시행일", ""))
         날짜별.setdefault(날짜, _빈항목())["검사결과"].append(lr)
 
     for img in 기록.get("영상검사", []):
-        날짜 = img.get("검사시행일", "")
+        날짜 = _날짜_정규화(img.get("검사시행일", ""))
         날짜별.setdefault(날짜, _빈항목())["영상검사"].append(img)
 
     for rx in 기록.get("처방", []):
-        날짜 = rx.get("방문일") or 방문일_매핑.get(rx.get("방문id"), "")
+        날짜 = _날짜_정규화(rx.get("방문일") or 방문일_매핑.get(rx.get("방문id"), ""))
         날짜별.setdefault(날짜, _빈항목())["처방"].append(rx)
 
+    # 검사처방 분류: 당일 처방 → 검사처방, 미래 처방 → 추적계획
     for o in 기록.get("검사처방", []):
-        날짜 = o.get("처방일", "")
-        날짜별.setdefault(날짜, _빈항목())["검사처방"].append(o)
+        방문일_원본 = 방문일_매핑.get(o.get("방문id"), "")
+        처방일_원본 = str(o.get("처방일", ""))
+        방문일_비교 = 방문일_원본.replace("-", "")[2:] if len(방문일_원본) == 10 else 방문일_원본
+        날짜 = _날짜_정규화(방문일_원본)
+        if 처방일_원본 == 방문일_비교 or o.get("시행여부") == 1:
+            날짜별.setdefault(날짜, _빈항목())["검사처방"].append(o)
+        else:
+            o["_미래검사"] = True
+            날짜별.setdefault(날짜, _빈항목())["추적계획"].append(o)
 
+    # 추적계획 — 방문일 기준 그룹핑
     for t in 기록.get("추적계획", []):
-        날짜 = t.get("방문일") or 방문일_매핑.get(t.get("방문id"), "")
+        날짜 = _날짜_정규화(t.get("방문일") or 방문일_매핑.get(t.get("방문id"), ""))
         날짜별.setdefault(날짜, _빈항목())["추적계획"].append(t)
 
     if not 날짜별:
@@ -954,14 +1001,21 @@ def _history_by_date(기록: dict):
                 st.markdown("**검사처방:**")
                 for o in 항목들["검사처방"]:
                     시행 = "✅" if o.get("시행여부") else "⬜"
-                    st.caption(f"  {시행} {o.get('검사명', '')}")
+                    처방일 = _날짜_정규화(o.get("처방일", ""))
+                    st.caption(f"  {시행} {o.get('검사명', '')} (처방일: {처방일})")
 
-            # 추적계획
+            # 추적계획 (기존 추적계획 + 미래 검사처방 혼합)
             if 항목들["추적계획"]:
                 st.markdown("**추적계획:**")
                 for t in 항목들["추적계획"]:
-                    완료 = "✅" if t.get("완료여부") else "⬜"
-                    st.caption(f"  {완료} {t.get('내용', '')}")
+                    if t.get("_미래검사"):
+                        시행 = "✅" if t.get("시행여부") else "⬜"
+                        예정일 = _날짜_정규화(t.get("처방일", ""))
+                        st.caption(f"  {시행} 🔬 {t.get('검사명', '')} (예정: {예정일})")
+                    else:
+                        완료 = "✅" if t.get("완료여부") else "⬜"
+                        예정일 = _날짜_정규화(t.get("예정일", ""))
+                        st.caption(f"  {완료} {t.get('내용', '')} (예정: {예정일})")
 
 
 # ============================================================
