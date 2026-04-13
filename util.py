@@ -174,6 +174,7 @@ def DB연결():
 
     # 기존 DB에 없는 칼럼 추가 (ALTER TABLE)
     기존_칼럼_추가 = [
+        ("환자",    "병록번호",  "TEXT"),
         ("방문",    "분석완료",  "INTEGER DEFAULT 1"),
         ("방문",    "유효여부",  "INTEGER DEFAULT 1"),
         ("방문",    "정정사유",  "TEXT"),
@@ -270,16 +271,35 @@ def 나이계산(생년월일):
 # ============================================
 # 등록/추가 함수
 # ============================================
-def 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력=""):
-    """새 환자를 DB에 등록하고, 환자id를 반환한다."""
+def 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력="", 병록번호=None):
+    """새 환자를 DB에 등록하고, 환자id를 반환한다.
+    병록번호가 None이면 등록 후 'MRN-XXXXX' 형식으로 자동 부여한다.
+    병록번호 중복 시 None 반환."""
     conn = DB연결()
     try:
+        # 병록번호 중복 체크 (입력된 경우만)
+        if 병록번호:
+            중복 = conn.execute(
+                "SELECT 환자id FROM 환자 WHERE 병록번호 = ?", (병록번호,)
+            ).fetchone()
+            if 중복:
+                print(f" ⚠ 병록번호 '{병록번호}'는 이미 사용 중입니다.")
+                return None
+
         with conn:
             cursor = conn.execute(
                 "INSERT INTO 환자 (이름, 생년월일, 성별, 가족력, 약부작용이력) VALUES (?, ?, ?, ?, ?)",
                 (이름, 생년월일, 성별, 가족력, 약부작용이력)
             )
-            return cursor.lastrowid
+            환자id = cursor.lastrowid
+
+            # 병록번호 자동 부여 또는 입력값 저장
+            최종_병록번호 = 병록번호 if 병록번호 else f"MRN-{환자id:05d}"
+            conn.execute(
+                "UPDATE 환자 SET 병록번호 = ? WHERE 환자id = ?",
+                (최종_병록번호, 환자id)
+            )
+            return 환자id
     finally:
         conn.close()
 
@@ -453,12 +473,13 @@ def 환자목록_정렬():
     print()
 
 
-def 환자검색(이름):
-    """이름으로 환자를 검색하여 dict 리스트로 반환한다."""
+def 환자검색(검색어):
+    """이름 또는 병록번호로 환자를 검색하여 dict 리스트로 반환한다."""
     conn = DB연결()
     try:
         결과 = conn.execute(
-            "SELECT * FROM 환자 WHERE 이름 LIKE ?", (f"%{이름}%",)
+            "SELECT * FROM 환자 WHERE 이름 LIKE ? OR 병록번호 LIKE ?",
+            (f"%{검색어}%", f"%{검색어}%")
         ).fetchall()
         return [dict(행) for 행 in 결과]
     finally:

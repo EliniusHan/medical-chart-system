@@ -52,7 +52,7 @@ def _call_api(system, user, max_tokens=4096, temperature=0.1):
     return 응답.content[0].text.strip()
 
 DB_SCHEMA = """DB 구조:
-- 환자(환자id, 이름, 생년월일, 성별, 가족력, 약부작용이력)
+- 환자(환자id, 병록번호, 이름, 생년월일, 성별, 가족력, 약부작용이력)
 - 진단(진단id, 환자id, 방문id, 진단명, 상태, 비고, 표준코드)
 - 방문(방문id, 환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연, 음주, 운동, free_text, 처방요약, 분석완료)
 - 검사결과(검사id, 환자id, 검사시행일, 검사항목, 결과값, 결과수치, 단위, 참고범위)
@@ -271,6 +271,10 @@ def 비식별화(df):
         ids = df["환자id"].unique()
         랜덤매핑 = {oid: random.randint(10000, 99999) for oid in ids}
         df["환자id"] = df["환자id"].map(랜덤매핑)
+    if "병록번호" in df.columns:
+        df["병록번호"] = df["병록번호"].apply(
+            lambda v: f"MRN_{random.randint(10000, 99999)}" if v else v
+        )
     return df
 
 
