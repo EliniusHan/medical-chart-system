@@ -245,10 +245,39 @@ def _init_state():
         "daily_filter":       "전체",
         "daily_show_all":     False,
         "ai_pattern_result":  None,
+        "page_history":       [],
+        "last_no_match_search": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+# ============================================================
+# 페이지 이동 헬퍼
+# ============================================================
+def _navigate_to(page: str, **kwargs):
+    """페이지 이동 시 현재 페이지를 히스토리에 저장한다."""
+    current = {
+        "page": st.session_state.page,
+        "selected_patient_id": st.session_state.selected_patient_id,
+    }
+    st.session_state.page_history.append(current)
+    if len(st.session_state.page_history) > 10:
+        st.session_state.page_history = st.session_state.page_history[-10:]
+    st.session_state.page = page
+    for k, v in kwargs.items():
+        st.session_state[k] = v
+    st.rerun()
+
+
+def _go_back():
+    """이전 페이지로 돌아간다."""
+    if st.session_state.page_history:
+        prev = st.session_state.page_history.pop()
+        st.session_state.page = prev["page"]
+        st.session_state.selected_patient_id = prev["selected_patient_id"]
+        st.rerun()
 
 
 # ============================================================
@@ -336,16 +365,14 @@ def _render_sidebar():
                 help="홈",
                 type="primary" if st.session_state.page == "홈" else "secondary",
             ):
-                st.session_state.page = "홈"
-                st.rerun()
+                _navigate_to("홈")
         with col_research:
             if st.button(
                 "📊", key="nav_연구", use_container_width=True,
                 help="연구",
                 type="primary" if st.session_state.page == "연구" else "secondary",
             ):
-                st.session_state.page = "연구"
-                st.rerun()
+                _navigate_to("연구")
 
         st.markdown("---")
 
@@ -360,9 +387,7 @@ def _render_sidebar():
         # ── 신환 등록 버튼 (텍스트 중앙 정렬용 래퍼)
         st.markdown('<div class="sidebar-center-btn">', unsafe_allow_html=True)
         if st.button("➕  신환 등록", use_container_width=True, type="primary", key="btn_new_patient"):
-            st.session_state.page = "신환등록"
-            st.session_state.selected_patient_id = None
-            st.rerun()
+            _navigate_to("신환등록", selected_patient_id=None)
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
@@ -383,8 +408,7 @@ def _render_sidebar():
                 "⚙️", key="btn_settings", help="설정",
                 type="primary" if st.session_state.page == "설정" else "secondary",
             ):
-                st.session_state.page = "설정"
-                st.rerun()
+                _navigate_to("설정")
         with c3:
             if st.button("🌐", key="btn_lang", help=f"언어: {st.session_state.lang}"):
                 st.session_state.show_lang_selector = not st.session_state.show_lang_selector
@@ -409,32 +433,38 @@ def _render_sidebar():
 
 
 def _render_patient_list(검색어: str):
-    """사이드바 환자 목록을 표시한다."""
-    if 검색어.strip():
-        이름결과 = 환자검색(검색어.strip())
-        conn = sqlite3.connect(DB_경로)
-        conn.row_factory = sqlite3.Row
-        번호결과 = [dict(r) for r in conn.execute(
-            "SELECT * FROM 환자 WHERE 병록번호 LIKE ?",
-            (f"%{검색어.strip()}%",),
-        ).fetchall()]
-        conn.close()
-        seen: set = set()
-        환자목록 = []
-        for p in 이름결과 + 번호결과:
-            if p["환자id"] not in seen:
-                seen.add(p["환자id"])
-                환자목록.append(p)
-        진단맵 = _주진단_조회([p["환자id"] for p in 환자목록])
-        for p in 환자목록:
-            p["주진단목록"] = 진단맵.get(p["환자id"], "")
-    else:
-        환자목록 = _환자목록_진단포함()
+    """사이드바 환자 목록을 표시한다. 검색 시 전체 목록 유지 + 매칭 환자 최상단."""
+    전체목록 = _환자목록_진단포함()
 
-    if not 환자목록:
-        msg = "검색 결과가 없습니다." if 검색어.strip() else "등록된 환자가 없습니다."
-        st.caption(msg)
+    if not 전체목록:
+        st.caption("등록된 환자가 없습니다.")
         return
+
+    if 검색어.strip():
+        검색어_clean = 검색어.strip()
+        매칭, 비매칭 = [], []
+        for p in 전체목록:
+            이름 = p.get("이름", "")
+            병록번호 = str(p.get("병록번호", ""))
+            if 검색어_clean in 이름 or 검색어_clean in 병록번호:
+                매칭.append(p)
+            else:
+                비매칭.append(p)
+
+        if 매칭:
+            환자목록 = 매칭 + 비매칭
+            # 현재 선택 환자가 매칭 목록에 없으면 첫 번째 매칭 환자 자동 선택
+            if st.session_state.selected_patient_id not in [p["환자id"] for p in 매칭]:
+                st.session_state.selected_patient_id = 매칭[0]["환자id"]
+                st.session_state.page = "환자상세"
+        else:
+            환자목록 = 전체목록
+            # 검색어가 바뀐 경우에만 팝업 표시 (무한 팝업 방지)
+            if st.session_state.last_no_match_search != 검색어_clean:
+                st.session_state.last_no_match_search = 검색어_clean
+                _검색실패_팝업(검색어_clean)
+    else:
+        환자목록 = 전체목록
 
     st.caption(f"{len(환자목록)}명")
 
@@ -454,9 +484,7 @@ def _render_patient_list(검색어: str):
             use_container_width=True,
             type="primary" if is_selected else "secondary",
         ):
-            st.session_state.selected_patient_id = 환자["환자id"]
-            st.session_state.page = "환자상세"
-            st.rerun()
+            _navigate_to("환자상세", selected_patient_id=환자["환자id"])
 
 
 # ============================================================
@@ -506,6 +534,8 @@ def _render_home():
 def _render_daily_check():
     """SQL 기반 데일리 체크를 필터/정렬하여 표시한다."""
     msgs = 데일리_SQL체크()
+    # 환자 이름 → 환자id 매핑
+    이름_id맵 = {p["이름"]: p["환자id"] for p in 환자목록가져오기()}
 
     if not msgs:
         st.success("✅ 현재 주의사항이 없습니다.")
@@ -557,7 +587,13 @@ def _render_daily_check():
             css = "warn"
         else:
             css = "info"
-        st.markdown(f'<div class="daily-item {css}">{msg}</div>', unsafe_allow_html=True)
+        이름매치 = re.search(r"[:\s]+(\S+)\s*—", msg)
+        환자id = 이름_id맵.get(이름매치.group(1)) if 이름매치 else None
+        if 환자id:
+            if st.button(msg, key=f"daily_{abs(hash(msg)) % 100000}", use_container_width=True):
+                _navigate_to("환자상세", selected_patient_id=환자id)
+        else:
+            st.markdown(f'<div class="daily-item {css}">{msg}</div>', unsafe_allow_html=True)
 
     remaining = len(sorted_msgs) - show_count
     if remaining > 0:
@@ -592,7 +628,13 @@ def _render_ai_pattern():
 # 신환 등록
 # ============================================================
 def _render_new_patient_form():
-    st.markdown("### ➕ 신환 등록")
+    hdr_left, hdr_right = st.columns([8, 1])
+    with hdr_left:
+        st.markdown("### ➕ 신환 등록")
+    with hdr_right:
+        if st.session_state.page_history:
+            if st.button("← 뒤로", key="btn_back_new", type="secondary"):
+                _go_back()
 
     with st.form("new_patient_form", clear_on_submit=False):
         이름 = st.text_input("환자 이름 *")
@@ -627,9 +669,7 @@ def _render_new_patient_form():
         나이표시 = f", {나이}세" if 나이 is not None else ""
         st.success(f"✅ {이름} 환자가 등록되었습니다. (병록번호: {mrn}{나이표시})")
 
-        st.session_state.selected_patient_id = 환자id
-        st.session_state.page = "환자상세"
-        st.rerun()
+        _navigate_to("환자상세", selected_patient_id=환자id)
 
 
 # ============================================================
@@ -654,20 +694,26 @@ def _render_patient_detail(환자id: int):
     가족력_현재  = 환자.get("가족력", "")      or ""
     약부작용_현재 = 환자.get("약부작용이력", "") or ""
 
-    # ── 환자 헤더 (컴팩트 2줄: 이름/번호/나이/성별/생년월일 + 주진단)
-    st.markdown(f"""
-    <div class="patient-header" style="padding:12px 16px;margin-bottom:8px;">
-        <div style="flex:1;">
-            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-                <span style="font-size:18px;font-weight:700;color:#1f2937;">{이름}</span>
-                <span style="font-size:14px;color:#6b7280;">{병록번호_숫자만}</span>
-                <span style="font-size:14px;color:#6b7280;">{나이표시}/{성별}</span>
-                <span style="font-size:14px;color:#6b7280;">{환자.get('생년월일', '')}</span>
+    # ── 환자 헤더 (컴팩트 2줄: 이름/번호/나이/성별/생년월일 + 주진단) + 뒤로가기
+    hdr_left, hdr_right = st.columns([8, 1])
+    with hdr_left:
+        st.markdown(f"""
+        <div class="patient-header" style="padding:12px 16px;margin-bottom:8px;">
+            <div style="flex:1;">
+                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                    <span style="font-size:18px;font-weight:700;color:#1f2937;">{이름}</span>
+                    <span style="font-size:14px;color:#6b7280;">{병록번호_숫자만}</span>
+                    <span style="font-size:14px;color:#6b7280;">{나이표시}/{성별}</span>
+                    <span style="font-size:14px;color:#6b7280;">{환자.get('생년월일', '')}</span>
+                </div>
+                <div style="font-size:13px;color:#4f6ef7;margin-top:4px;">{주진단표시}</div>
             </div>
-            <div style="font-size:13px;color:#4f6ef7;margin-top:4px;">{주진단표시}</div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    with hdr_right:
+        if st.session_state.page_history:
+            if st.button("← 뒤로", key="btn_back_detail", type="secondary"):
+                _go_back()
 
     # ── 가족력/약부작용
     fc1, fc2 = st.columns(2)
@@ -742,6 +788,14 @@ def _tab_edit(환자id: int):
 
 def _tab_delete(환자id: int):
     st.info("🔧 추후 구현 — 기록 삭제\n\n`util.py` 삭제 함수들 연동 예정")
+
+
+@st.dialog("검색 결과")
+def _검색실패_팝업(검색어: str):
+    """검색 결과 없음 팝업."""
+    st.warning(f"'{검색어}' 에 해당하는 환자를 찾을 수 없습니다.")
+    if st.button("확인", use_container_width=True):
+        st.rerun()
 
 
 def _날짜_정규화(날짜str) -> str:
@@ -1022,7 +1076,13 @@ def _history_by_date(기록: dict):
 # 연구 화면
 # ============================================================
 def _render_research_page():
-    st.markdown("## 📊 연구")
+    hdr_left, hdr_right = st.columns([8, 1])
+    with hdr_left:
+        st.markdown("## 📊 연구")
+    with hdr_right:
+        if st.session_state.page_history:
+            if st.button("← 뒤로", key="btn_back_research", type="secondary"):
+                _go_back()
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "📈 전체 통계",
@@ -1044,7 +1104,13 @@ def _render_research_page():
 # 설정 화면
 # ============================================================
 def _render_settings_page():
-    st.markdown("## ⚙️ 설정")
+    hdr_left, hdr_right = st.columns([8, 1])
+    with hdr_left:
+        st.markdown("## ⚙️ 설정")
+    with hdr_right:
+        if st.session_state.page_history:
+            if st.button("← 뒤로", key="btn_back_settings", type="secondary"):
+                _go_back()
 
     st.markdown("### 모드 선택")
     새_모드 = st.radio(
