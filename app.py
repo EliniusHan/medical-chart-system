@@ -41,12 +41,24 @@ st.set_page_config(
 def _inject_css():
     st.markdown("""
     <style>
-    /* 전체 레이아웃 */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+    /* 전체 글자체 — Inter(영문) + Noto Sans KR(한글), 강력한 선택자로 Streamlit 기본 스타일 override */
+    html, body, [class*="css"], .stApp,
+    .stMarkdown, .stMarkdown p, .stMarkdown span,
+    .stTextInput input, .stTextArea textarea,
+    button, label, .stTabs [data-baseweb="tab"],
+    .stDataFrame, .stMetric, .stCaption,
+    [data-testid="stSidebar"] * {
+        font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    }
+
+    /* 전체 레이아웃 — max-width 제거로 브라우저 창 크기에 비례 확대 */
     .main .block-container {
         padding-top: 1.5rem;
         padding-left: 2rem;
         padding-right: 2rem;
-        max-width: 1600px;
+        max-width: 100% !important;
     }
 
     /* 사이드바 배경 */
@@ -151,11 +163,58 @@ def _inject_css():
         padding-right: 4px;
     }
 
-    /* 반응형: 환자 목록 왼쪽 패널 구분선 */
-    .patient-panel-divider {
-        border-right: 1px solid #e5e7eb;
-        padding-right: 16px;
-        min-height: calc(100vh - 120px);
+
+    /* 사이드바 버튼 좌측 정렬 — 내부 p 태그까지 */
+    section[data-testid="stSidebar"] button {
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+    section[data-testid="stSidebar"] button p {
+        text-align: left !important;
+    }
+    section[data-testid="stSidebar"] button div {
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+    /* 하단 아이콘 3개만 중앙 정렬 유지 */
+    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
+        justify-content: center !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button p {
+        text-align: center !important;
+    }
+
+    /* 사이드바 크기 고정 */
+    section[data-testid="stSidebar"] {
+        width: 260px !important;
+        min-width: 260px !important;
+        max-width: 260px !important;
+    }
+    /* 사이드바 리사이즈 핸들 숨기기 */
+    section[data-testid="stSidebar"] > div[data-testid="stSidebarResizeHandle"] {
+        display: none !important;
+    }
+
+    /* 환자 화면 좌우 패널 독립 스크롤 — 상단 정렬 */
+    [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"]) {
+        align-items: flex-start !important;
+    }
+
+    /* Streamlit 기본 사이드바 닫기 버튼 숨기기 */
+    button[data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
+    }
+
+    /* 환자 목록 버튼 좌측 정렬 (메인 컨텐츠 영역) */
+    section[data-testid="stMain"] button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+    }
+    section[data-testid="stMain"] button p,
+    section[data-testid="stMain"] button div {
+        text-align: left !important;
+        justify-content: flex-start !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -169,6 +228,7 @@ def _init_state():
         "page": "홈",
         "mode": "연구용",
         "lang": "한국어",
+        "show_lang_selector": False,
         "selected_patient_id": None,
         "patient_view": None,       # None | "new" | "detail"
         "daily_filter": "전체",
@@ -313,22 +373,29 @@ def _render_sidebar():
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("⚙️", key="btn_settings", help="설정"):
+            if st.button("⚙️", key="btn_settings", help="설정 (추후 구현)"):
                 st.toast("설정 (추후 구현)")
         with c2:
-            선택_언어 = st.selectbox(
-                "언어",
+            if st.button("🌐", key="btn_lang", help=f"언어: {st.session_state.lang}"):
+                st.session_state.show_lang_selector = not st.session_state.show_lang_selector
+                st.rerun()
+        with c3:
+            if st.button("🚪", key="btn_logout", help="로그아웃 (추후 구현)"):
+                st.toast("로그아웃 (추후 구현)")
+
+        # 언어 선택 패널 (🌐 클릭 시 표시)
+        if st.session_state.show_lang_selector:
+            선택 = st.radio(
+                "언어 선택",
                 langs,
                 index=langs.index(st.session_state.lang),
                 label_visibility="collapsed",
-                key="lang_select",
+                key="lang_radio",
             )
-            if 선택_언어 != st.session_state.lang:
-                st.session_state.lang = 선택_언어
+            if 선택 != st.session_state.lang:
+                st.session_state.lang = 선택
+                st.session_state.show_lang_selector = False
                 st.rerun()
-        with c3:
-            if st.button("→", key="btn_logout", help="로그아웃"):
-                st.toast("로그아웃 (추후 구현)")
 
 
 # ============================================================
@@ -478,22 +545,22 @@ def _render_ai_pattern():
 # 환자 화면
 # ============================================================
 def _render_patient_page():
-    col_left, col_right = st.columns([3, 7], gap="medium")
+    left_col, right_col = st.columns([3, 7], gap="medium")
 
-    with col_left:
-        st.markdown('<div class="patient-panel-divider">', unsafe_allow_html=True)
-        _render_patient_list_panel()
-        st.markdown("</div>", unsafe_allow_html=True)
+    with left_col:
+        with st.container(height=700, border=False):
+            _render_patient_list_panel()
 
-    with col_right:
-        view = st.session_state.patient_view
-        if view == "new":
-            _render_new_patient_form()
-        elif view == "detail" and st.session_state.selected_patient_id:
-            _render_patient_detail(st.session_state.selected_patient_id)
-        else:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            st.info("👈 왼쪽 목록에서 환자를 선택하거나 신환을 등록하세요.")
+    with right_col:
+        with st.container(height=700, border=False):
+            view = st.session_state.patient_view
+            if view == "new":
+                _render_new_patient_form()
+            elif view == "detail" and st.session_state.selected_patient_id:
+                _render_patient_detail(st.session_state.selected_patient_id)
+            else:
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                st.info("👈 왼쪽 목록에서 환자를 선택하거나 신환을 등록하세요.")
 
 
 def _render_patient_list_panel():
@@ -554,13 +621,11 @@ def _render_patient_list_panel():
         병록번호 = 환자.get("병록번호", "")
         나이 = 나이계산(환자.get("생년월일"))
         성별 = 환자.get("성별", "")
-        주진단 = (환자.get("주진단목록") or "진단 없음")
-        # 길면 축약
-        if len(주진단) > 22:
-            주진단 = 주진단[:22] + "…"
-        나이표시 = f"{나이}세" if 나이 is not None else "?"
+        # "MRN-00041" → "00041"
+        mrn_숫자 = 병록번호[4:] if 병록번호 and 병록번호.startswith("MRN-") else (병록번호 or "")
+        나이_숫자 = str(나이) if 나이 is not None else "?"
 
-        label = f"{이름}  {병록번호}\n{나이표시} {성별}  {주진단}"
+        label = f"{이름}  {mrn_숫자}\n{나이_숫자}/{성별}"
 
         if st.button(
             label,
