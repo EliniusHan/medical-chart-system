@@ -39,67 +39,65 @@ st.set_page_config(
 # CSS
 # ============================================================
 def _inject_css():
-    sidebar_width = "260px" if st.session_state.get("sidebar_open", True) else "76px"
-    st.markdown(f"""
+    st.markdown("""
     <style>
     /* 전체 레이아웃 */
-    .main .block-container {{
+    .main .block-container {
         padding-top: 1.5rem;
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 1600px;
-    }}
+    }
 
-    /* 사이드바 너비 제어 */
-    section[data-testid="stSidebar"] > div:first-child {{
-        width: {sidebar_width} !important;
+    /* 사이드바 배경 */
+    section[data-testid="stSidebar"] > div:first-child {
         background-color: #1e2432;
         border-right: 1px solid #2d3550;
-    }}
+    }
     /* 사이드바 텍스트 색상 */
     section[data-testid="stSidebar"] .stMarkdown p,
     section[data-testid="stSidebar"] .stMarkdown span,
-    section[data-testid="stSidebar"] label {{
+    section[data-testid="stSidebar"] label {
         color: #c5cce8 !important;
-    }}
-    section[data-testid="stSidebar"] hr {{
+    }
+    section[data-testid="stSidebar"] hr {
         border-color: #2d3550 !important;
         margin: 8px 0;
-    }}
+    }
     /* 사이드바 버튼 — secondary (기본) */
-    section[data-testid="stSidebar"] button[kind="secondary"] {{
+    section[data-testid="stSidebar"] button[kind="secondary"] {
         background: transparent !important;
         border: 1px solid transparent !important;
         color: #c5cce8 !important;
         transition: background 0.15s;
-    }}
-    section[data-testid="stSidebar"] button[kind="secondary"]:hover {{
+    }
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover {
         background: #2d3550 !important;
         border-color: #3d4a70 !important;
-    }}
+    }
     /* 사이드바 버튼 — primary (활성 메뉴) */
-    section[data-testid="stSidebar"] button[kind="primary"] {{
+    section[data-testid="stSidebar"] button[kind="primary"] {
         background: #4f6ef7 !important;
         border-color: #4f6ef7 !important;
         color: white !important;
-    }}
+    }
 
     /* 요약 카드 */
-    .stat-card {{
+    .stat-card {
         background: white;
         border-radius: 12px;
         padding: 20px 24px;
         box-shadow: 0 2px 8px rgba(0,0,0,.07);
         border-left: 4px solid #4f6ef7;
-    }}
-    .stat-card.warn {{ border-left-color: #f59e0b; }}
-    .stat-card.danger {{ border-left-color: #ef4444; }}
-    .stat-card .label {{ font-size: 13px; color: #6b7280; margin-bottom: 4px; }}
-    .stat-card .value {{ font-size: 30px; font-weight: 700; color: #1f2937; }}
-    .stat-card .sub {{ font-size: 12px; color: #9ca3af; margin-top: 4px; }}
+    }
+    .stat-card.warn { border-left-color: #f59e0b; }
+    .stat-card.danger { border-left-color: #ef4444; }
+    .stat-card .label { font-size: 13px; color: #6b7280; margin-bottom: 4px; }
+    .stat-card .value { font-size: 30px; font-weight: 700; color: #1f2937; }
+    .stat-card .sub { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 
     /* 환자 헤더 배지 */
-    .patient-header {{
+    .patient-header {
         display: flex;
         align-items: center;
         gap: 16px;
@@ -107,8 +105,8 @@ def _inject_css():
         background: #eff2ff;
         border-radius: 12px;
         margin-bottom: 16px;
-    }}
-    .initial-badge {{
+    }
+    .initial-badge {
         width: 52px; height: 52px;
         border-radius: 50%;
         background: #4f6ef7;
@@ -116,49 +114,49 @@ def _inject_css():
         display: flex; align-items: center; justify-content: center;
         font-weight: 700; font-size: 22px;
         flex-shrink: 0;
-    }}
-    .initial-badge.sm {{
+    }
+    .initial-badge.sm {
         width: 36px; height: 36px;
         font-size: 15px;
-    }}
+    }
 
     /* 데일리 체크 항목 */
-    .daily-item {{
+    .daily-item {
         padding: 10px 14px;
         border-radius: 8px;
         margin-bottom: 6px;
         font-size: 14px;
         line-height: 1.5;
-    }}
-    .daily-item.danger {{
+    }
+    .daily-item.danger {
         background: #fef2f2;
         border-left: 3px solid #ef4444;
         color: #991b1b;
-    }}
-    .daily-item.warn {{
+    }
+    .daily-item.warn {
         background: #fffbeb;
         border-left: 3px solid #f59e0b;
         color: #92400e;
-    }}
-    .daily-item.info {{
+    }
+    .daily-item.info {
         background: #eff6ff;
         border-left: 3px solid #3b82f6;
         color: #1e40af;
-    }}
+    }
 
     /* 환자 목록 패널 스크롤 */
-    div[data-testid="patient-list-scroll"] {{
+    div[data-testid="patient-list-scroll"] {
         max-height: calc(100vh - 280px);
         overflow-y: auto;
         padding-right: 4px;
-    }}
+    }
 
     /* 반응형: 환자 목록 왼쪽 패널 구분선 */
-    .patient-panel-divider {{
+    .patient-panel-divider {
         border-right: 1px solid #e5e7eb;
         padding-right: 16px;
         min-height: calc(100vh - 120px);
-    }}
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -171,7 +169,6 @@ def _init_state():
         "page": "홈",
         "mode": "연구용",
         "lang": "한국어",
-        "sidebar_open": True,
         "selected_patient_id": None,
         "patient_view": None,       # None | "new" | "detail"
         "daily_filter": "전체",
@@ -257,31 +254,23 @@ def _elapsed_days(msg: str) -> int:
 # 사이드바
 # ============================================================
 def _render_sidebar():
-    open_ = st.session_state.sidebar_open
-
     with st.sidebar:
-        # ── 토글
-        if st.button("◀" if open_ else "▶", key="sb_toggle", help="사이드바 접기/펴기"):
-            st.session_state.sidebar_open = not open_
-            st.rerun()
+        st.markdown("### 🏥 의료 차트")
 
         st.markdown("---")
 
         # ── 메뉴
-        if open_:
-            st.markdown("**메뉴**")
-
+        st.markdown("**메뉴**")
         for icon, label, page_key in [
             ("🏠", "홈",  "홈"),
             ("👤", "환자", "환자"),
             ("📊", "연구", "연구"),
         ]:
-            btn_label = f"{icon}  {label}" if open_ else icon
             is_active = st.session_state.page == page_key
             if st.button(
-                btn_label,
+                f"{icon}  {label}",
                 key=f"nav_{page_key}",
-                use_container_width=open_,
+                use_container_width=True,
                 type="primary" if is_active else "secondary",
             ):
                 st.session_state.page = page_key
@@ -290,41 +279,29 @@ def _render_sidebar():
         st.markdown("---")
 
         # ── 모드 선택
-        if open_:
-            st.markdown("**모드**")
-            새_모드 = st.radio(
-                "mode_radio",
-                ["연구용", "진료보조용"],
-                index=0 if st.session_state.mode == "연구용" else 1,
-                label_visibility="collapsed",
-                help="연구용: 저장 포함 5단계 | 진료보조용: 제안까지 3단계",
-            )
-            if 새_모드 != st.session_state.mode:
-                st.session_state.mode = 새_모드
-        else:
-            # 접힌 상태: 현재 모드 아이콘만 표시
-            mode_icon = "🔬" if st.session_state.mode == "연구용" else "🩺"
-            st.button(mode_icon, key="mode_icon", disabled=True)
+        st.markdown("**모드**")
+        새_모드 = st.radio(
+            "mode_radio",
+            ["연구용", "진료보조용"],
+            index=0 if st.session_state.mode == "연구용" else 1,
+            label_visibility="collapsed",
+            help="연구용: 저장 포함 5단계 | 진료보조용: 제안까지 3단계",
+        )
+        if 새_모드 != st.session_state.mode:
+            st.session_state.mode = 새_모드
 
         st.markdown("---")
 
         # ── 관리
-        if open_:
-            st.markdown("**관리**")
-
-        backup_label = "💾  백업" if open_ else "💾"
-        if st.button(backup_label, key="btn_backup", use_container_width=open_):
+        st.markdown("**관리**")
+        if st.button("💾  백업", key="btn_backup", use_container_width=True):
             try:
                 경로 = DB백업()
-                if open_:
-                    st.success(f"백업 완료\n`{os.path.basename(경로)}`")
-                else:
-                    st.toast("백업 완료")
+                st.success(f"백업 완료\n`{os.path.basename(경로)}`")
             except Exception as e:
                 st.error(str(e))
 
-        manual_label = "✏️  수동입력" if open_ else "✏️"
-        if st.button(manual_label, key="btn_manual", use_container_width=open_):
+        if st.button("✏️  수동입력", key="btn_manual", use_container_width=True):
             st.session_state.page = "환자"
             st.session_state.patient_view = "new"
             st.session_state.selected_patient_id = None
@@ -332,18 +309,22 @@ def _render_sidebar():
 
         # ── 하단 아이콘 (설정 / 언어 / 로그아웃)
         st.markdown("---")
-        lang_code_map = {"한국어": "KO", "English": "EN", "Deutsch": "DE", "日本語": "JA"}
-        현재_코드 = lang_code_map.get(st.session_state.lang, "KO")
+        langs = ["한국어", "English", "Deutsch", "日本語"]
 
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("⚙️", key="btn_settings", help="설정"):
                 st.toast("설정 (추후 구현)")
         with c2:
-            if st.button(현재_코드, key="btn_lang", help="언어 변경"):
-                langs = list(lang_code_map.keys())
-                idx = langs.index(st.session_state.lang)
-                st.session_state.lang = langs[(idx + 1) % len(langs)]
+            선택_언어 = st.selectbox(
+                "언어",
+                langs,
+                index=langs.index(st.session_state.lang),
+                label_visibility="collapsed",
+                key="lang_select",
+            )
+            if 선택_언어 != st.session_state.lang:
+                st.session_state.lang = 선택_언어
                 st.rerun()
         with c3:
             if st.button("→", key="btn_logout", help="로그아웃"):
@@ -534,11 +515,29 @@ def _render_patient_list_panel():
 
     # 환자 목록 로드
     if 검색어.strip():
-        raw = 환자검색(검색어.strip())
-        진단맵 = _주진단_조회([p["환자id"] for p in raw])
-        for p in raw:
+        # 이름으로 검색
+        이름결과 = 환자검색(검색어.strip())
+
+        # 병록번호로도 검색
+        conn = sqlite3.connect(DB_경로)
+        conn.row_factory = sqlite3.Row
+        번호결과 = [dict(r) for r in conn.execute(
+            "SELECT * FROM 환자 WHERE 병록번호 LIKE ?",
+            (f"%{검색어.strip()}%",),
+        ).fetchall()]
+        conn.close()
+
+        # 중복 제거 후 합치기
+        seen: set = set()
+        환자목록 = []
+        for p in 이름결과 + 번호결과:
+            if p["환자id"] not in seen:
+                seen.add(p["환자id"])
+                환자목록.append(p)
+
+        진단맵 = _주진단_조회([p["환자id"] for p in 환자목록])
+        for p in 환자목록:
             p["주진단목록"] = 진단맵.get(p["환자id"], "")
-        환자목록 = raw
     else:
         환자목록 = _환자목록_진단포함()
 
