@@ -43,7 +43,7 @@ def _inject_css():
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
-    /* 전체 글자체 — Inter(영문) + Noto Sans KR(한글), 강력한 선택자로 Streamlit 기본 스타일 override */
+    /* 전체 글자체 — Inter(영문) + Noto Sans KR(한글) */
     html, body, [class*="css"], .stApp,
     .stMarkdown, .stMarkdown p, .stMarkdown span,
     .stTextInput input, .stTextArea textarea,
@@ -53,7 +53,7 @@ def _inject_css():
         font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     }
 
-    /* 전체 레이아웃 — max-width 제거로 브라우저 창 크기에 비례 확대 */
+    /* 전체 레이아웃 */
     .main .block-container {
         padding-top: 1.5rem;
         padding-left: 2rem;
@@ -87,11 +87,47 @@ def _inject_css():
         background: #2d3550 !important;
         border-color: #3d4a70 !important;
     }
-    /* 사이드바 버튼 — primary (활성 메뉴) */
+    /* 사이드바 버튼 — primary (활성/선택) */
     section[data-testid="stSidebar"] button[kind="primary"] {
         background: #4f6ef7 !important;
         border-color: #4f6ef7 !important;
         color: white !important;
+    }
+
+    /* 사이드바 환자 목록 버튼 좌측 정렬 */
+    section[data-testid="stSidebar"] button {
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+    section[data-testid="stSidebar"] button p {
+        text-align: left !important;
+    }
+    section[data-testid="stSidebar"] button div {
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+    /* 헤더 행 / 하단 아이콘 행(HorizontalBlock) 버튼은 중앙 정렬 */
+    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
+        justify-content: center !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button p {
+        text-align: center !important;
+    }
+
+    /* 사이드바 크기 고정 */
+    section[data-testid="stSidebar"] {
+        width: 280px !important;
+        min-width: 280px !important;
+        max-width: 280px !important;
+    }
+    /* 사이드바 리사이즈 핸들 숨기기 */
+    section[data-testid="stSidebar"] > div[data-testid="stSidebarResizeHandle"] {
+        display: none !important;
+    }
+    /* 사이드바 접기 버튼 숨기기 */
+    button[data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
     }
 
     /* 요약 카드 */
@@ -102,11 +138,11 @@ def _inject_css():
         box-shadow: 0 2px 8px rgba(0,0,0,.07);
         border-left: 4px solid #4f6ef7;
     }
-    .stat-card.warn { border-left-color: #f59e0b; }
+    .stat-card.warn  { border-left-color: #f59e0b; }
     .stat-card.danger { border-left-color: #ef4444; }
     .stat-card .label { font-size: 13px; color: #6b7280; margin-bottom: 4px; }
     .stat-card .value { font-size: 30px; font-weight: 700; color: #1f2937; }
-    .stat-card .sub { font-size: 12px; color: #9ca3af; margin-top: 4px; }
+    .stat-card .sub   { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 
     /* 환자 헤더 배지 */
     .patient-header {
@@ -156,57 +192,7 @@ def _inject_css():
         color: #1e40af;
     }
 
-    /* 환자 목록 패널 스크롤 */
-    div[data-testid="patient-list-scroll"] {
-        max-height: calc(100vh - 280px);
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-
-
-    /* 사이드바 버튼 좌측 정렬 — 내부 p 태그까지 */
-    section[data-testid="stSidebar"] button {
-        text-align: left !important;
-        justify-content: flex-start !important;
-    }
-    section[data-testid="stSidebar"] button p {
-        text-align: left !important;
-    }
-    section[data-testid="stSidebar"] button div {
-        text-align: left !important;
-        justify-content: flex-start !important;
-    }
-    /* 하단 아이콘 3개만 중앙 정렬 유지 */
-    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
-        justify-content: center !important;
-    }
-    section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button p {
-        text-align: center !important;
-    }
-
-    /* 사이드바 크기 고정 */
-    section[data-testid="stSidebar"] {
-        width: 260px !important;
-        min-width: 260px !important;
-        max-width: 260px !important;
-    }
-    /* 사이드바 리사이즈 핸들 숨기기 */
-    section[data-testid="stSidebar"] > div[data-testid="stSidebarResizeHandle"] {
-        display: none !important;
-    }
-
-    /* 환자 화면 좌우 패널 독립 스크롤 — 상단 정렬 */
-    [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"]) {
-        align-items: flex-start !important;
-    }
-
-    /* Streamlit 기본 사이드바 닫기 버튼 숨기기 */
-    button[data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapsedControl"] {
-        display: none !important;
-    }
-
-    /* 환자 목록 버튼 좌측 정렬 (메인 컨텐츠 영역) */
+    /* 메인 영역 버튼 좌측 정렬 */
     section[data-testid="stMain"] button {
         justify-content: flex-start !important;
         text-align: left !important;
@@ -225,15 +211,14 @@ def _inject_css():
 # ============================================================
 def _init_state():
     defaults = {
-        "page": "홈",
-        "mode": "연구용",
-        "lang": "한국어",
+        "page":               "홈",       # "홈" | "연구" | "신환등록" | "환자상세" | "설정"
+        "mode":               "연구용",
+        "lang":               "한국어",
         "show_lang_selector": False,
         "selected_patient_id": None,
-        "patient_view": None,       # None | "new" | "detail"
-        "daily_filter": "전체",
-        "daily_show_all": False,
-        "ai_pattern_result": None,
+        "daily_filter":       "전체",
+        "daily_show_all":     False,
+        "ai_pattern_result":  None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -244,7 +229,7 @@ def _init_state():
 # DB 헬퍼
 # ============================================================
 def _환자목록_진단포함():
-    """환자 목록에 활성/의심 진단 목록을 포함하여 반환한다."""
+    """환자 목록에 활성/의심 진단을 포함해 반환한다."""
     conn = sqlite3.connect(DB_경로)
     conn.row_factory = sqlite3.Row
     try:
@@ -302,7 +287,7 @@ def _추적지연_수():
 
 
 def _elapsed_days(msg: str) -> int:
-    """메시지에서 경과 일수를 추출한다 (정렬용). 더 클수록 오래됨."""
+    """메시지에서 경과 일수를 추출한다 (정렬용)."""
     m = re.search(r"(\d+)(일|개월) 경과", msg)
     if not m:
         return 0
@@ -311,75 +296,69 @@ def _elapsed_days(msg: str) -> int:
 
 
 # ============================================================
-# 사이드바
+# 사이드바 — 환자 목록 전용
 # ============================================================
 def _render_sidebar():
     with st.sidebar:
-        st.markdown("### 🏥 의료 차트")
-
-        st.markdown("---")
-
-        # ── 메뉴
-        st.markdown("**메뉴**")
-        for icon, label, page_key in [
-            ("🏠", "홈",  "홈"),
-            ("👤", "환자", "환자"),
-            ("📊", "연구", "연구"),
-        ]:
-            is_active = st.session_state.page == page_key
+        # ── 헤더 행: 제목 + [홈] [연구] 버튼
+        col_title, col_home, col_research = st.columns([5, 2, 2])
+        with col_title:
+            st.markdown("**🏥 의료 차트**")
+        with col_home:
             if st.button(
-                f"{icon}  {label}",
-                key=f"nav_{page_key}",
-                use_container_width=True,
-                type="primary" if is_active else "secondary",
+                "🏠 홈", key="nav_홈", use_container_width=True,
+                type="primary" if st.session_state.page == "홈" else "secondary",
             ):
-                st.session_state.page = page_key
+                st.session_state.page = "홈"
+                st.rerun()
+        with col_research:
+            if st.button(
+                "📊 연구", key="nav_연구", use_container_width=True,
+                type="primary" if st.session_state.page == "연구" else "secondary",
+            ):
+                st.session_state.page = "연구"
                 st.rerun()
 
         st.markdown("---")
 
-        # ── 모드 선택
-        st.markdown("**모드**")
-        새_모드 = st.radio(
-            "mode_radio",
-            ["연구용", "진료보조용"],
-            index=0 if st.session_state.mode == "연구용" else 1,
+        # ── 환자 검색창
+        검색어 = st.text_input(
+            "search",
+            placeholder="🔍  이름 또는 병록번호 검색...",
             label_visibility="collapsed",
-            help="연구용: 저장 포함 5단계 | 진료보조용: 제안까지 3단계",
+            key="patient_search",
         )
-        if 새_모드 != st.session_state.mode:
-            st.session_state.mode = 새_모드
 
-        st.markdown("---")
-
-        # ── 관리
-        st.markdown("**관리**")
-        if st.button("💾  백업", key="btn_backup", use_container_width=True):
-            try:
-                경로 = DB백업()
-                st.success(f"백업 완료\n`{os.path.basename(경로)}`")
-            except Exception as e:
-                st.error(str(e))
-
-        if st.button("✏️  수동입력", key="btn_manual", use_container_width=True):
-            st.session_state.page = "환자"
-            st.session_state.patient_view = "new"
+        # ── 신환 등록 버튼
+        if st.button("➕  신환 등록", use_container_width=True, type="primary", key="btn_new_patient"):
+            st.session_state.page = "신환등록"
             st.session_state.selected_patient_id = None
             st.rerun()
 
-        # ── 하단 아이콘 (설정 / 언어 / 로그아웃)
+        st.markdown("---")
+
+        # ── 환자 목록
+        _render_patient_list(검색어)
+
+        # ── 하단 아이콘 행: ✏️ ⚙️ 🌐 🚪
         st.markdown("---")
         langs = ["한국어", "English", "Deutsch", "日本語"]
-
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
-            if st.button("⚙️", key="btn_settings", help="설정 (추후 구현)"):
-                st.toast("설정 (추후 구현)")
+            if st.button("✏️", key="btn_manual", help="수동입력 (추후 구현)"):
+                st.toast("수동입력 (추후 구현)")
         with c2:
+            if st.button(
+                "⚙️", key="btn_settings", help="설정",
+                type="primary" if st.session_state.page == "설정" else "secondary",
+            ):
+                st.session_state.page = "설정"
+                st.rerun()
+        with c3:
             if st.button("🌐", key="btn_lang", help=f"언어: {st.session_state.lang}"):
                 st.session_state.show_lang_selector = not st.session_state.show_lang_selector
                 st.rerun()
-        with c3:
+        with c4:
             if st.button("🚪", key="btn_logout", help="로그아웃 (추후 구현)"):
                 st.toast("로그아웃 (추후 구현)")
 
@@ -398,19 +377,68 @@ def _render_sidebar():
                 st.rerun()
 
 
+def _render_patient_list(검색어: str):
+    """사이드바 환자 목록을 표시한다."""
+    if 검색어.strip():
+        이름결과 = 환자검색(검색어.strip())
+        conn = sqlite3.connect(DB_경로)
+        conn.row_factory = sqlite3.Row
+        번호결과 = [dict(r) for r in conn.execute(
+            "SELECT * FROM 환자 WHERE 병록번호 LIKE ?",
+            (f"%{검색어.strip()}%",),
+        ).fetchall()]
+        conn.close()
+        seen: set = set()
+        환자목록 = []
+        for p in 이름결과 + 번호결과:
+            if p["환자id"] not in seen:
+                seen.add(p["환자id"])
+                환자목록.append(p)
+        진단맵 = _주진단_조회([p["환자id"] for p in 환자목록])
+        for p in 환자목록:
+            p["주진단목록"] = 진단맵.get(p["환자id"], "")
+    else:
+        환자목록 = _환자목록_진단포함()
+
+    if not 환자목록:
+        msg = "검색 결과가 없습니다." if 검색어.strip() else "등록된 환자가 없습니다."
+        st.caption(msg)
+        return
+
+    st.caption(f"{len(환자목록)}명")
+
+    for 환자 in 환자목록:
+        is_selected = 환자["환자id"] == st.session_state.selected_patient_id
+        이름     = 환자.get("이름", "")
+        병록번호  = 환자.get("병록번호", "")
+        나이     = 나이계산(환자.get("생년월일"))
+        성별     = 환자.get("성별", "")
+        mrn_숫자 = 병록번호[4:] if 병록번호 and 병록번호.startswith("MRN-") else (병록번호 or "")
+        나이_숫자 = str(나이) if 나이 is not None else "?"
+        label = f"{이름}  {mrn_숫자}\n{나이_숫자}/{성별}"
+
+        if st.button(
+            label,
+            key=f"pat_{환자['환자id']}",
+            use_container_width=True,
+            type="primary" if is_selected else "secondary",
+        ):
+            st.session_state.selected_patient_id = 환자["환자id"]
+            st.session_state.page = "환자상세"
+            st.rerun()
+
+
 # ============================================================
 # 홈 화면
 # ============================================================
 def _render_home():
     st.markdown("## 🏥 의료 차트 시스템")
 
-    # ── 요약 카드 3개
-    환자수 = len(환자목록가져오기())
+    환자수  = len(환자목록가져오기())
     미분석수 = len(미분석차트조회())
-    지연수 = _추적지연_수()
+    지연수  = _추적지연_수()
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
         st.markdown(f"""
         <div class="stat-card">
@@ -418,7 +446,6 @@ def _render_home():
             <div class="value">{환자수}<span style="font-size:16px;color:#6b7280;font-weight:400;">명</span></div>
         </div>
         """, unsafe_allow_html=True)
-
     with col2:
         warn_class = " warn" if 미분석수 > 0 else ""
         st.markdown(f"""
@@ -427,7 +454,6 @@ def _render_home():
             <div class="value">{미분석수}<span style="font-size:16px;color:#6b7280;font-weight:400;">건</span></div>
         </div>
         """, unsafe_allow_html=True)
-
     with col3:
         danger_class = " danger" if 지연수 > 0 else ""
         st.markdown(f"""
@@ -439,9 +465,7 @@ def _render_home():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 탭
     tab1, tab2 = st.tabs(["📅 데일리 체크", "🤖 AI 패턴 분석 (유료)"])
-
     with tab1:
         _render_daily_check()
     with tab2:
@@ -456,10 +480,9 @@ def _render_daily_check():
         st.success("✅ 현재 주의사항이 없습니다.")
         return
 
-    # 필터 버튼 행
     counts = {
-        "전체":      len(msgs),
-        "추적 지연": sum(1 for m in msgs if "추적 지연"  in m),
+        "전체":        len(msgs),
+        "추적 지연":   sum(1 for m in msgs if "추적 지연"   in m),
         "미시행 검사": sum(1 for m in msgs if "미시행 검사" in m),
         "이번 주 예정": sum(1 for m in msgs if "이번 주 예정" in m),
     }
@@ -480,10 +503,9 @@ def _render_daily_check():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 필터 적용
     필터 = st.session_state.daily_filter
     if 필터 == "추적 지연":
-        filtered = [m for m in msgs if "추적 지연"  in m]
+        filtered = [m for m in msgs if "추적 지연"   in m]
     elif 필터 == "미시행 검사":
         filtered = [m for m in msgs if "미시행 검사" in m]
     elif 필터 == "이번 주 예정":
@@ -491,16 +513,10 @@ def _render_daily_check():
     else:
         filtered = msgs
 
-    # 경과 기간 순 정렬 (추적 지연 항목)
-    지연 = sorted(
-        [m for m in filtered if "추적 지연" in m],
-        key=_elapsed_days,
-        reverse=True,
-    )
-    나머지 = [m for m in filtered if "추적 지연" not in m]
+    지연   = sorted([m for m in filtered if "추적 지연" in m], key=_elapsed_days, reverse=True)
+    나머지  = [m for m in filtered if "추적 지연" not in m]
     sorted_msgs = 지연 + 나머지
 
-    # 페이징
     show_count = len(sorted_msgs) if st.session_state.daily_show_all else min(10, len(sorted_msgs))
 
     for msg in sorted_msgs[:show_count]:
@@ -525,7 +541,7 @@ def _render_ai_pattern():
 
     if st.session_state.ai_pattern_result:
         st.markdown(st.session_state.ai_pattern_result)
-        col_a, col_b = st.columns([1, 4])
+        col_a, _ = st.columns([1, 4])
         with col_a:
             if st.button("🔄 다시 분석", key="ai_rerun"):
                 st.session_state.ai_pattern_result = None
@@ -542,102 +558,8 @@ def _render_ai_pattern():
 
 
 # ============================================================
-# 환자 화면
+# 신환 등록
 # ============================================================
-def _render_patient_page():
-    left_col, right_col = st.columns([3, 7], gap="medium")
-
-    with left_col:
-        with st.container(height=700, border=False):
-            _render_patient_list_panel()
-
-    with right_col:
-        with st.container(height=700, border=False):
-            view = st.session_state.patient_view
-            if view == "new":
-                _render_new_patient_form()
-            elif view == "detail" and st.session_state.selected_patient_id:
-                _render_patient_detail(st.session_state.selected_patient_id)
-            else:
-                st.markdown("<br><br>", unsafe_allow_html=True)
-                st.info("👈 왼쪽 목록에서 환자를 선택하거나 신환을 등록하세요.")
-
-
-def _render_patient_list_panel():
-    st.markdown("### 환자 목록")
-
-    검색어 = st.text_input(
-        "search",
-        placeholder="🔍  이름 또는 병록번호 검색...",
-        label_visibility="collapsed",
-        key="patient_search",
-    )
-
-    if st.button("➕  신환 등록", use_container_width=True, type="primary", key="btn_new_patient"):
-        st.session_state.patient_view = "new"
-        st.session_state.selected_patient_id = None
-        st.rerun()
-
-    st.markdown("---")
-
-    # 환자 목록 로드
-    if 검색어.strip():
-        # 이름으로 검색
-        이름결과 = 환자검색(검색어.strip())
-
-        # 병록번호로도 검색
-        conn = sqlite3.connect(DB_경로)
-        conn.row_factory = sqlite3.Row
-        번호결과 = [dict(r) for r in conn.execute(
-            "SELECT * FROM 환자 WHERE 병록번호 LIKE ?",
-            (f"%{검색어.strip()}%",),
-        ).fetchall()]
-        conn.close()
-
-        # 중복 제거 후 합치기
-        seen: set = set()
-        환자목록 = []
-        for p in 이름결과 + 번호결과:
-            if p["환자id"] not in seen:
-                seen.add(p["환자id"])
-                환자목록.append(p)
-
-        진단맵 = _주진단_조회([p["환자id"] for p in 환자목록])
-        for p in 환자목록:
-            p["주진단목록"] = 진단맵.get(p["환자id"], "")
-    else:
-        환자목록 = _환자목록_진단포함()
-
-    if not 환자목록:
-        msg = "검색 결과가 없습니다." if 검색어.strip() else "등록된 환자가 없습니다."
-        st.caption(msg)
-        return
-
-    st.caption(f"{len(환자목록)}명")
-
-    for 환자 in 환자목록:
-        is_selected = 환자["환자id"] == st.session_state.selected_patient_id
-        이름 = 환자.get("이름", "")
-        병록번호 = 환자.get("병록번호", "")
-        나이 = 나이계산(환자.get("생년월일"))
-        성별 = 환자.get("성별", "")
-        # "MRN-00041" → "00041"
-        mrn_숫자 = 병록번호[4:] if 병록번호 and 병록번호.startswith("MRN-") else (병록번호 or "")
-        나이_숫자 = str(나이) if 나이 is not None else "?"
-
-        label = f"{이름}  {mrn_숫자}\n{나이_숫자}/{성별}"
-
-        if st.button(
-            label,
-            key=f"pat_{환자['환자id']}",
-            use_container_width=True,
-            type="primary" if is_selected else "secondary",
-        ):
-            st.session_state.selected_patient_id = 환자["환자id"]
-            st.session_state.patient_view = "detail"
-            st.rerun()
-
-
 def _render_new_patient_form():
     st.markdown("### ➕ 신환 등록")
 
@@ -675,17 +597,20 @@ def _render_new_patient_form():
         st.success(f"✅ {이름} 환자가 등록되었습니다. (병록번호: {mrn}{나이표시})")
 
         st.session_state.selected_patient_id = 환자id
-        st.session_state.patient_view = "detail"
+        st.session_state.page = "환자상세"
         st.rerun()
 
 
+# ============================================================
+# 환자 상세
+# ============================================================
 def _render_patient_detail(환자id: int):
     기록 = 환자전체기록조회(환자id)
     if not 기록:
         st.error("환자 정보를 찾을 수 없습니다.")
         return
 
-    환자 = 기록["환자"]
+    환자    = 기록["환자"]
     이름    = 환자.get("이름", "")
     나이    = 나이계산(환자.get("생년월일"))
     성별    = 환자.get("성별", "")
@@ -695,7 +620,6 @@ def _render_patient_detail(환자id: int):
     주진단표시 = ", ".join(활성진단[:3]) + ("…" if len(활성진단) > 3 else "") if 활성진단 else "진단 없음"
     나이표시 = f"{나이}세" if 나이 is not None else "?"
 
-    # ── 환자 헤더
     st.markdown(f"""
     <div class="patient-header">
         <div class="initial-badge">{이니셜}</div>
@@ -712,21 +636,15 @@ def _render_patient_detail(환자id: int):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── 5개 탭
     tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 수정", "🗑️ 삭제", "📂 전체이력"])
-
     with tabs[0]:
         _tab_briefing(환자id)
-
     with tabs[1]:
         _tab_chart_entry(환자id)
-
     with tabs[2]:
         _tab_edit(환자id)
-
     with tabs[3]:
         _tab_delete(환자id)
-
     with tabs[4]:
         _tab_history(기록)
 
@@ -742,7 +660,6 @@ def _tab_chart_entry(환자id: int):
     else:
         st.caption("연구용 모드 — Step 1~5 전체 (데이터 추출 및 저장 포함)")
 
-    # 단계 진행 표시
     steps = ["① 차트 입력", "② AI 제안 확인", "③ 보완 차트", "④ 추출 데이터", "⑤ 저장 완료"]
     if mode == "진료보조용":
         steps = steps[:3]
@@ -771,7 +688,6 @@ def _tab_history(기록: dict):
     """환자 전체이력을 테이블별 접기/펼치기로 표시한다."""
     환자 = 기록["환자"]
 
-    # 환자 기본정보
     with st.expander("🧑 환자 기본정보", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -781,12 +697,11 @@ def _tab_history(기록: dict):
             st.metric("생년월일", 환자.get("생년월일", ""))
             st.metric("병록번호", 환자.get("병록번호", ""))
         with col3:
-            가족력 = 환자.get("가족력") or "(없음)"
+            가족력  = 환자.get("가족력")      or "(없음)"
             약부작용 = 환자.get("약부작용이력") or "(없음)"
-            st.text_area("가족력", 가족력, height=60, disabled=True, key=f"fh_{환자['환자id']}")
+            st.text_area("가족력",     가족력,  height=60, disabled=True, key=f"fh_{환자['환자id']}")
             st.text_area("약부작용이력", 약부작용, height=60, disabled=True, key=f"ae_{환자['환자id']}")
 
-    # 테이블별 섹션 정의: (제목, 키, 표시할 컬럼 순서)
     sections = [
         ("🏥 방문 기록",  "방문",     ["방문id","방문일","수축기","이완기","심박수","키","몸무게","BMI","흡연","음주","운동","처방요약"]),
         ("🔬 진단",       "진단",     ["진단id","진단명","상태","비고","표준코드","방문일"]),
@@ -821,7 +736,6 @@ def _render_research_page():
         "🤖 AI 자동 분석",
         "📐 단계별 분석",
     ])
-
     with tab1:
         st.info("🔧 추후 구현 — 전체 통계\n\n`util.통계보기()` 연동 예정")
     with tab2:
@@ -830,6 +744,33 @@ def _render_research_page():
         st.info("🔧 추후 구현 — AI 자동 분석\n\n`research_module.통계분석_자동()` 연동 예정")
     with tab4:
         st.info("🔧 추후 구현 — 단계별 분석\n\n`research_module.통계분석_단계별()` 연동 예정")
+
+
+# ============================================================
+# 설정 화면
+# ============================================================
+def _render_settings_page():
+    st.markdown("## ⚙️ 설정")
+
+    st.markdown("### 모드 선택")
+    새_모드 = st.radio(
+        "mode_radio",
+        ["연구용", "진료보조용"],
+        index=0 if st.session_state.mode == "연구용" else 1,
+        help="연구용: 저장 포함 5단계 | 진료보조용: 제안까지 3단계",
+    )
+    if 새_모드 != st.session_state.mode:
+        st.session_state.mode = 새_모드
+
+    st.markdown("---")
+
+    st.markdown("### DB 백업")
+    if st.button("💾  백업 실행", type="primary", key="settings_backup"):
+        try:
+            경로 = DB백업()
+            st.success(f"백업 완료: `{os.path.basename(경로)}`")
+        except Exception as e:
+            st.error(str(e))
 
 
 # ============================================================
@@ -844,10 +785,18 @@ def main():
 
     if page == "홈":
         _render_home()
-    elif page == "환자":
-        _render_patient_page()
     elif page == "연구":
         _render_research_page()
+    elif page == "신환등록":
+        _render_new_patient_form()
+    elif page == "환자상세":
+        if st.session_state.selected_patient_id:
+            _render_patient_detail(st.session_state.selected_patient_id)
+        else:
+            st.session_state.page = "홈"
+            st.rerun()
+    elif page == "설정":
+        _render_settings_page()
     else:
         _render_home()
 
