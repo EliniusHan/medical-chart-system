@@ -17,6 +17,7 @@ from util import (
     환자등록,
     환자목록가져오기,
     환자전체기록조회,
+    환자정보수정,
 )
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
@@ -192,6 +193,21 @@ def _inject_css():
         color: #1e40af;
     }
 
+    /* 신환 등록 버튼 중앙 정렬 */
+    .sidebar-center-btn button {
+        justify-content: center !important;
+    }
+    .sidebar-center-btn button p,
+    .sidebar-center-btn button div {
+        text-align: center !important;
+        justify-content: center !important;
+    }
+
+    /* 환자 상세 좌우 패널 상단 정렬 */
+    [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"]) {
+        align-items: flex-start !important;
+    }
+
     /* 메인 영역 버튼 좌측 정렬 */
     section[data-testid="stMain"] button {
         justify-content: flex-start !important;
@@ -306,14 +322,16 @@ def _render_sidebar():
             st.markdown("**🏥 의료 차트**")
         with col_home:
             if st.button(
-                "🏠 홈", key="nav_홈", use_container_width=True,
+                "🏠", key="nav_홈", use_container_width=True,
+                help="홈",
                 type="primary" if st.session_state.page == "홈" else "secondary",
             ):
                 st.session_state.page = "홈"
                 st.rerun()
         with col_research:
             if st.button(
-                "📊 연구", key="nav_연구", use_container_width=True,
+                "📊", key="nav_연구", use_container_width=True,
+                help="연구",
                 type="primary" if st.session_state.page == "연구" else "secondary",
             ):
                 st.session_state.page = "연구"
@@ -329,16 +347,19 @@ def _render_sidebar():
             key="patient_search",
         )
 
-        # ── 신환 등록 버튼
+        # ── 신환 등록 버튼 (텍스트 중앙 정렬용 래퍼)
+        st.markdown('<div class="sidebar-center-btn">', unsafe_allow_html=True)
         if st.button("➕  신환 등록", use_container_width=True, type="primary", key="btn_new_patient"):
             st.session_state.page = "신환등록"
             st.session_state.selected_patient_id = None
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # ── 환자 목록
-        _render_patient_list(검색어)
+        # ── 환자 목록 (고정 높이 스크롤 컨테이너)
+        with st.container(height=500, border=False):
+            _render_patient_list(검색어)
 
         # ── 하단 아이콘 행: ✏️ ⚙️ 🌐 🚪
         st.markdown("---")
@@ -620,10 +641,14 @@ def _render_patient_detail(환자id: int):
     주진단표시 = ", ".join(활성진단[:3]) + ("…" if len(활성진단) > 3 else "") if 활성진단 else "진단 없음"
     나이표시 = f"{나이}세" if 나이 is not None else "?"
 
+    가족력_현재  = 환자.get("가족력", "")      or ""
+    약부작용_현재 = 환자.get("약부작용이력", "") or ""
+
+    # ── 환자 헤더 (이름·병록번호·주진단)
     st.markdown(f"""
     <div class="patient-header">
         <div class="initial-badge">{이니셜}</div>
-        <div>
+        <div style="flex:1;">
             <div style="font-size:18px;font-weight:700;">
                 {이름}
                 <span style="font-size:14px;font-weight:400;color:#6b7280;">
@@ -636,17 +661,47 @@ def _render_patient_detail(환자id: int):
     </div>
     """, unsafe_allow_html=True)
 
-    tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 수정", "🗑️ 삭제", "📂 전체이력"])
-    with tabs[0]:
-        _tab_briefing(환자id)
-    with tabs[1]:
-        _tab_chart_entry(환자id)
-    with tabs[2]:
-        _tab_edit(환자id)
-    with tabs[3]:
-        _tab_delete(환자id)
-    with tabs[4]:
-        _tab_history(기록)
+    # ── 가족력/약부작용 — 헤더와 같은 배경색으로 바로 아래 연결
+    st.markdown('<div style="background:#eff2ff;border-radius:0 0 12px 12px;padding:8px 16px 12px;margin-top:-16px;margin-bottom:16px;">', unsafe_allow_html=True)
+    fc1, fc2 = st.columns(2)
+    with fc1:
+        fi_col, fb_col = st.columns([5, 1], vertical_alignment="bottom")
+        with fi_col:
+            가족력_입력 = st.text_input("가족력", value=가족력_현재, key=f"fh_{환자id}")
+        with fb_col:
+            if st.button("저장", key=f"fh_save_{환자id}", use_container_width=True):
+                환자정보수정(환자id, "가족력", 가족력_입력)
+                st.toast("가족력 저장 완료")
+                st.rerun()
+    with fc2:
+        ai_col, ab_col = st.columns([5, 1], vertical_alignment="bottom")
+        with ai_col:
+            약부작용_입력 = st.text_input("약부작용이력", value=약부작용_현재, key=f"ae_{환자id}")
+        with ab_col:
+            if st.button("저장", key=f"ae_save_{환자id}", use_container_width=True):
+                환자정보수정(환자id, "약부작용이력", 약부작용_입력)
+                st.toast("약부작용이력 저장 완료")
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    col_left, col_right = st.columns([6, 4], gap="medium")
+
+    with col_left:
+        with st.container(height=650, border=False):
+            tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 수정", "🗑️ 삭제"])
+            with tabs[0]:
+                _tab_briefing(환자id)
+            with tabs[1]:
+                _tab_chart_entry(환자id)
+            with tabs[2]:
+                _tab_edit(환자id)
+            with tabs[3]:
+                _tab_delete(환자id)
+
+    with col_right:
+        with st.container(height=650, border=False):
+            st.markdown("### 📂 전체이력")
+            _tab_history(기록)
 
 
 def _tab_briefing(환자id: int):
@@ -684,44 +739,229 @@ def _tab_delete(환자id: int):
     st.info("🔧 추후 구현 — 기록 삭제\n\n`util.py` 삭제 함수들 연동 예정")
 
 
-def _tab_history(기록: dict):
-    """환자 전체이력을 테이블별 접기/펼치기로 표시한다."""
-    환자 = 기록["환자"]
+@st.dialog("진료 기록")
+def _show_visit_record(방문: dict):
+    """방문 기록 상세를 모달 팝업으로 표시한다."""
+    st.markdown(f"**{방문.get('방문일', '')}**")
 
-    with st.expander("🧑 환자 기본정보", expanded=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("이름",     환자.get("이름", ""))
-            st.metric("성별",     환자.get("성별", ""))
-        with col2:
-            st.metric("생년월일", 환자.get("생년월일", ""))
-            st.metric("병록번호", 환자.get("병록번호", ""))
-        with col3:
-            가족력  = 환자.get("가족력")      or "(없음)"
-            약부작용 = 환자.get("약부작용이력") or "(없음)"
-            st.text_area("가족력",     가족력,  height=60, disabled=True, key=f"fh_{환자['환자id']}")
-            st.text_area("약부작용이력", 약부작용, height=60, disabled=True, key=f"ae_{환자['환자id']}")
+    bp = ""
+    if 방문.get("수축기") and 방문.get("이완기"):
+        bp = f"BP {방문['수축기']}/{방문['이완기']}"
+    if 방문.get("심박수"):
+        bp += f"  HR {방문['심박수']}"
+    if bp:
+        st.caption(bp)
+
+    st.markdown("---")
+
+    free_text = 방문.get("free_text", "") or "(기록 없음)"
+    st.markdown(free_text)
+
+    처방요약 = 방문.get("처방요약", "")
+    if 처방요약:
+        st.markdown("---")
+        st.markdown(f"**처방요약:** {처방요약}")
+
+
+def _render_grouped_section(
+    data: list,
+    date_col: str,
+    display_cols: list,
+    show_visit_btn: bool = False,
+    section_key: str = "",
+):
+    """데이터를 날짜별로 묶어 최신 순으로 테이블 표시한다."""
+    if not data:
+        st.caption("기록 없음")
+        return
+
+    other_cols = [c for c in display_cols if c != date_col]
+
+    grouped: dict = {}
+    for row in data:
+        날짜 = str(row.get(date_col, "") or "날짜 없음")
+        grouped.setdefault(날짜, []).append(row)
+
+    for 날짜 in sorted(grouped.keys(), reverse=True):
+        rows = grouped[날짜]
+        if show_visit_btn:
+            날짜_col, 버튼_col = st.columns([4, 1])
+            with 날짜_col:
+                st.markdown(f"**{날짜}**")
+            with 버튼_col:
+                if st.button("기록보기", key=f"visit_{section_key}_{날짜}", type="secondary"):
+                    _show_visit_record(rows[0])
+        else:
+            st.markdown(f"**{날짜}**")
+
+        available = [c for c in other_cols if c in rows[0]]
+        if available:
+            df = pd.DataFrame(rows)[available]
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                height=min(len(rows) * 40 + 38, 200),
+            )
+        else:
+            st.caption("표시할 데이터 없음")
+
+
+def _tab_history(기록: dict):
+    """환자 전체이력 — 항목별/날짜별 탭으로 표시한다."""
+    tab_항목, tab_날짜 = st.tabs(["📑 항목별 정렬", "📅 날짜별 정렬"])
+    with tab_항목:
+        _history_by_category(기록)
+    with tab_날짜:
+        _history_by_date(기록)
+
+
+def _history_by_category(기록: dict):
+    """항목(테이블)별로 접기/펼치기 표시한다."""
+    # 방문id → 방문일 매핑 (진단·추적계획·처방의 날짜 보완용)
+    방문일_매핑 = {v["방문id"]: v["방문일"] for v in 기록.get("방문", []) if v.get("방문id")}
+
+    for 테이블 in ("진단", "추적계획", "처방"):
+        for 행 in 기록.get(테이블, []):
+            if not 행.get("방문일") and 행.get("방문id"):
+                행["방문일"] = 방문일_매핑.get(행["방문id"], "")
 
     sections = [
-        ("🏥 방문 기록",  "방문",     ["방문id","방문일","수축기","이완기","심박수","키","몸무게","BMI","흡연","음주","운동","처방요약"]),
-        ("🔬 진단",       "진단",     ["진단id","진단명","상태","비고","표준코드","방문일"]),
-        ("🧪 검사결과",   "검사결과", ["검사id","검사시행일","검사항목","결과값","단위","참고범위"]),
-        ("📷 영상검사",   "영상검사", ["영상id","검사시행일","검사종류","결과요약","주요수치"]),
-        ("📅 추적계획",   "추적계획", ["추적id","예정일","내용","완료여부","방문일"]),
-        ("💊 처방",       "처방",     ["처방id","약품명","성분명","용량","용법","일수"]),
-        ("🔬 검사처방",   "검사처방", ["처방검사id","검사명","처방일","시행여부"]),
+        ("🏥 방문 기록",  "방문",     "방문일",    ["수축기","이완기","심박수","키","몸무게","BMI","흡연","음주","운동","처방요약"]),
+        ("🔬 진단",       "진단",     "방문일",    ["진단명","상태","비고","표준코드"]),
+        ("🧪 검사결과",   "검사결과", "검사시행일", ["검사항목","결과값","단위","참고범위"]),
+        ("📷 영상검사",   "영상검사", "검사시행일", ["검사종류","결과요약","주요수치"]),
+        ("📅 추적계획",   "추적계획", "예정일",    ["내용","완료여부"]),
+        ("💊 처방",       "처방",     "방문일",    ["약품명","성분명","용량","용법","일수"]),
+        ("🔬 검사처방",   "검사처방", "처방일",    ["검사명","시행여부"]),
     ]
 
-    for title, key, cols in sections:
+    for title, key, date_col, display_cols in sections:
         data = 기록.get(key, [])
         is_first = key in ("방문", "진단")
+        is_방문 = key == "방문"
         with st.expander(f"{title} ({len(data)}건)", expanded=is_first):
-            if data:
-                available = [c for c in cols if c in data[0]]
-                df = pd.DataFrame(data)[available]
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            else:
-                st.caption("기록 없음")
+            _render_grouped_section(
+                data, date_col, display_cols,
+                show_visit_btn=is_방문,
+                section_key=key,
+            )
+
+
+def _history_by_date(기록: dict):
+    """모든 기록을 날짜별로 묶어 최신 순으로 표시한다."""
+    # 방문id → 방문일 매핑
+    방문일_매핑 = {v["방문id"]: v["방문일"] for v in 기록.get("방문", []) if v.get("방문id")}
+
+    # 날짜별 수집 헬퍼
+    def _빈항목():
+        return {"방문": [], "진단": [], "검사결과": [], "영상검사": [], "처방": [], "검사처방": [], "추적계획": []}
+
+    날짜별: dict = {}
+
+    for v in 기록.get("방문", []):
+        날짜 = v.get("방문일", "")
+        날짜별.setdefault(날짜, _빈항목())["방문"].append(v)
+
+    for d in 기록.get("진단", []):
+        날짜 = d.get("방문일") or 방문일_매핑.get(d.get("방문id"), "")
+        날짜별.setdefault(날짜, _빈항목())["진단"].append(d)
+
+    for lr in 기록.get("검사결과", []):
+        날짜 = lr.get("검사시행일", "")
+        날짜별.setdefault(날짜, _빈항목())["검사결과"].append(lr)
+
+    for img in 기록.get("영상검사", []):
+        날짜 = img.get("검사시행일", "")
+        날짜별.setdefault(날짜, _빈항목())["영상검사"].append(img)
+
+    for rx in 기록.get("처방", []):
+        날짜 = rx.get("방문일") or 방문일_매핑.get(rx.get("방문id"), "")
+        날짜별.setdefault(날짜, _빈항목())["처방"].append(rx)
+
+    for o in 기록.get("검사처방", []):
+        날짜 = o.get("처방일", "")
+        날짜별.setdefault(날짜, _빈항목())["검사처방"].append(o)
+
+    for t in 기록.get("추적계획", []):
+        날짜 = t.get("방문일") or 방문일_매핑.get(t.get("방문id"), "")
+        날짜별.setdefault(날짜, _빈항목())["추적계획"].append(t)
+
+    if not 날짜별:
+        st.caption("기록 없음")
+        return
+
+    sorted_dates = sorted(날짜별.keys(), key=lambda x: str(x or ""), reverse=True)
+
+    for i, 날짜 in enumerate(sorted_dates):
+        항목들 = 날짜별[날짜]
+        총건수 = sum(len(v) for v in 항목들.values())
+
+        with st.expander(f"📅 {날짜 or '날짜 없음'} ({총건수}건)", expanded=(i == 0)):
+
+            # 활력징후 + 진료기록
+            for v in 항목들["방문"]:
+                bp_parts = []
+                if v.get("수축기") and v.get("이완기"):
+                    bp_parts.append(f"BP {v['수축기']}/{v['이완기']}")
+                if v.get("심박수"):
+                    bp_parts.append(f"HR {v['심박수']}")
+                if v.get("몸무게") and v.get("키"):
+                    bp_parts.append(f"BMI {v.get('BMI', '')}")
+                if bp_parts:
+                    st.caption("활력징후: " + "  |  ".join(bp_parts))
+                ft = v.get("free_text", "")
+                if ft and ft.strip():
+                    st.markdown("**진료 기록:**")
+                    st.markdown(ft)
+                rx_summary = v.get("처방요약", "")
+                if rx_summary and rx_summary.strip():
+                    st.caption(f"처방요약: {rx_summary}")
+
+            # 진단
+            if 항목들["진단"]:
+                st.markdown("**진단:**")
+                for d in 항목들["진단"]:
+                    상태표시 = f"({d.get('상태', '')})" if d.get('상태') else ""
+                    st.caption(f"  {d.get('진단명', '')} {상태표시}")
+
+            # 검사결과
+            if 항목들["검사결과"]:
+                st.markdown("**검사결과:**")
+                cols_사용 = [c for c in ["검사항목", "결과값", "단위", "참고범위"] if c in 항목들["검사결과"][0]]
+                if cols_사용:
+                    df = pd.DataFrame(항목들["검사결과"])[cols_사용]
+                    st.dataframe(df, use_container_width=True, hide_index=True,
+                                 height=min(len(df) * 40 + 38, 200))
+
+            # 영상검사
+            if 항목들["영상검사"]:
+                st.markdown("**영상검사:**")
+                for img in 항목들["영상검사"]:
+                    st.caption(f"  {img.get('검사종류', '')} — {img.get('결과요약', '')}")
+
+            # 처방
+            if 항목들["처방"]:
+                st.markdown("**처방:**")
+                cols_사용 = [c for c in ["약품명", "성분명", "용량", "용법", "일수"] if c in 항목들["처방"][0]]
+                if cols_사용:
+                    df = pd.DataFrame(항목들["처방"])[cols_사용]
+                    st.dataframe(df, use_container_width=True, hide_index=True,
+                                 height=min(len(df) * 40 + 38, 200))
+
+            # 검사처방
+            if 항목들["검사처방"]:
+                st.markdown("**검사처방:**")
+                for o in 항목들["검사처방"]:
+                    시행 = "✅" if o.get("시행여부") else "⬜"
+                    st.caption(f"  {시행} {o.get('검사명', '')}")
+
+            # 추적계획
+            if 항목들["추적계획"]:
+                st.markdown("**추적계획:**")
+                for t in 항목들["추적계획"]:
+                    완료 = "✅" if t.get("완료여부") else "⬜"
+                    st.caption(f"  {완료} {t.get('내용', '')}")
 
 
 # ============================================================
