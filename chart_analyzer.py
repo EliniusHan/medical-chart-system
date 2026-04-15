@@ -1259,10 +1259,11 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
 
 
 def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
-    """free-text 수정 후 AI 재분석. 이 방문의 기존 데이터 전부 무효화 후 재추출/저장.
-    Returns: (final_free_text, 저장건수) — 차트분석_저장_전체흐름()과 동일 형식"""
+    """free-text 수정 후 AI 재분석. 기존 데이터 무효화 후 재추출/저장.
+    Streamlit 호환 (input() 사용 안 함).
+    Returns: (extraction_data, 저장건수) or (None, 0)"""
 
-    # 이 방문에 연결된 기존 데이터 전부 무효화
+    # 1. 이 방문에 연결된 기존 데이터 전부 무효화
     conn = sqlite3.connect(DB경로)
     try:
         for 테이블 in ["진단", "추적계획", "처방", "검사처방"]:
@@ -1282,8 +1283,2912 @@ def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
     finally:
         conn.close()
 
-    # free-text 업데이트
+    # 2. free-text 업데이트
     방문기록_일괄수정(방문id, {"free_text": 새_free_text})
 
-    # 기존 전체흐름 재활용
-    return 차트분석_저장_전체흐름(환자id, 방문id, 새_free_text, 방문일)
+    # 3. AI 재분석 (차트분석 함수 직접 호출, input() 없음)
+    분석결과 = 차트분석(환자id, 새_free_text, 방문일)
+    if not 분석결과:
+        return None, 0
+
+    extraction = 분석결과.get("extraction", {})
+    if not extraction:
+        return None, 0
+
+    # 4. 전체 항목 자동 승인하여 저장
+    approved_data = {}
+    approved_data["vitals"] = extraction.get("vitals", {})
+    approved_data["lifestyle"] = extraction.get("lifestyle", {})
+    approved_data["diagnoses"] = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    approved_data["lab_results"] = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    approved_data["imaging"] = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    approved_data["prescriptions"] = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    approved_data["tracking"] = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    approved_data["test_orders"] = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    approved_data["prescription_summary"] = extraction.get("prescription_summary", "")
+    approved_data["patient_info"] = {k: v for k, v in extraction.get("patient_info", {}).items() if v and v.get("변경유형")}
+
+    저장건수 = 분석결과_저장(환자id, 방문id, 새_free_text, approved_data)
+    방문기록_일괄수정(방문id, {"분석완료": 1})
+
+    return extraction, 저장건수
+def _parse_json_response(text):
+    """AI 응답에서 JSON 파싱 (마크다운 코드블록 제거 포함)"""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f" [오류] AI 응답을 JSON으로 파싱할 수 없습니다.")
+        print(f" 원본 응답:\n{text[:500]}")
+        return None
+
+
+
+def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
+    """익명화된 프롬프트로 API 호출 후 복원. Returns: 응답텍스트 or None"""
+    응답 = api_재시도(lambda: client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=max_tokens,
+        temperature=0.1,
+        system=system,
+        messages=[{"role": "user", "content": 프롬프트}]
+    ))
+    if not 응답:
+        return None
+    텍스트 = api_복원(응답.content[0].text.strip(), 매핑)
+    return 텍스트
+
+
+# ============================================================
+# 공공 DB 조회 헬퍼 (차트분석 내부용)
+# ============================================================
+
+# 흔한 내과 진단명 → 영문 변환 테이블
+_진단명_영문 = {
+    "고혈압": "hypertension",
+    "고지혈증": "dyslipidemia",
+    "당뇨": "diabetes mellitus",
+    "당뇨전단계": "prediabetes",
+    "갑상선기능저하증": "hypothyroidism",
+    "갑상선기능항진증": "hyperthyroidism",
+    "통풍": "gout",
+    "골다공증": "osteoporosis",
+    "만성콩팥병": "chronic kidney disease",
+    "심방세동": "atrial fibrillation",
+    "심부전": "heart failure",
+    "관상동맥질환": "coronary artery disease",
+    "뇌졸중": "stroke",
+    "빈혈": "anemia",
+    "지방간": "fatty liver",
+}
+
+
+def _free_text에서_약품명_추출(free_text):
+    """free-text에서 약품명 패턴 간단 추출 (영문 소문자 + 숫자mg 조합).
+    완벽하지 않아도 됨 — AI가 나중에 정확히 추출함."""
+    import re
+    패턴 = r'\b[a-z]{4,}(?:\s*\d+\s*mg)?\b'
+    후보 = re.findall(패턴, free_text.lower())
+    제외목록 = {"with", "that", "this", "from", "have", "been", "will", "also",
+               "than", "more", "less", "after", "before", "normal", "blood",
+               "free", "text", "note", "plan", "done", "left", "right"}
+    seen = set()
+    약품목록 = []
+    for w in 후보:
+        w = w.strip()
+        if w not in seen and w not in 제외목록:
+            seen.add(w)
+            약품목록.append(w)
+        if len(약품목록) >= 5:
+            break
+    return 약품목록
+
+
+def _free_text에서_pubmed_검색어_추출(free_text):
+    """free-text에서 진단명을 찾아 영문 검색어 생성."""
+    for 한글, 영문 in _진단명_영문.items():
+        if 한글 in free_text:
+            return f"{영문} treatment guideline"
+    return None
+
+
+def _공공DB_조회(free_text):
+    """처방 안전성(DUR/e약은요/급여) + PubMed 조회.
+    Returns: (공공DB결과_문자열, 조회성공여부)"""
+    try:
+        약품목록 = _free_text에서_약품명_추출(free_text)
+        검색어 = _free_text에서_pubmed_검색어_추출(free_text)
+
+        안전성결과 = 처방_안전성_조회(약품목록) if 약품목록 else {}
+        pubmed결과 = pubmed_검색(검색어) if 검색어 else []
+
+        dur_정보 = {약품: v["dur"] for 약품, v in 안전성결과.items()}
+        약품정보 = {약품: v["약품정보"] for 약품, v in 안전성결과.items()}
+        급여정보 = {약품: v["급여정보"] for 약품, v in 안전성결과.items()}
+
+        조회결과 = (
+            "[공공 DB 조회 결과 — 참고하여 검토 의견에 반영하세요]\n\n"
+            "[DUR 정보]\n" + json.dumps(dur_정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[약품 정보 (e약은요)]\n" + json.dumps(약품정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[급여 정보]\n" + json.dumps(급여정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[PubMed 검색 결과]\n" + json.dumps(pubmed결과, ensure_ascii=False, indent=2) + "\n\n"
+            "위 정보를 검토 의견(💡), 법적 확인(⚖), 설명의무에 활용하세요.\n"
+            "DUR에서 병용금기가 발견되면 반드시 ⚖ 법적 확인사항에 포함하세요.\n"
+            "PubMed 논문은 관련 있는 것만 검토 의견에 포함하세요.\n"
+            "급여 정보가 있으면 처방 관련 제안에 급여 여부를 명시하세요."
+        )
+
+        return 조회결과, True
+
+    except Exception as e:
+        print(f"  ⚠ 공공 DB 조회 실패: {e}")
+        return "[공공 DB 조회 결과 — 조회 실패 또는 해당 정보 없음. 내부 지식으로 판단하세요.]", False
+
+
+# ============================================================
+# Step 2: 1번째 API — 분석 + 추출 + 제안
+# ============================================================
+def 차트분석(환자id, free_text, 방문일=None):
+    """AI 분석: 데이터 추출 + 검토의견 + 법적확인 + 설명의무 전부 수행.
+    Returns: dict(extraction, suggestions, legal, informed_consent) or None"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    나이 = 나이계산(기록["환자"]["생년월일"])
+    if 나이 is not None:
+        기록["환자"]["나이"] = f"{나이}세"
+
+    # 공공 DB 조회 (AI API 호출 전)
+    공공DB_문자열, 조회성공 = _공공DB_조회(free_text)
+    if not 조회성공:
+        print("  ⚠ 공공 DB 조회 실패. AI 내부 지식으로 검토합니다.")
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_free_text = free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else free_text
+
+    패턴요약 = 의사패턴_요약생성()
+    패턴요약_섹션 = f"\n[의사 진료 패턴 — 참고하여 맥락에 맞는 검토 의견 제시에 활용]\n{패턴요약}\n" if 패턴요약 else ""
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[오늘 free-text]
+{익명_free_text}
+
+{공공DB_문자열}{패턴요약_섹션}
+위 free-text를 분석하여 기존 데이터와 비교한 뒤, 지정된 JSON 형식으로 출력하세요."""
+
+    응답텍스트 = _익명화_api호출(SYSTEM_PROMPT, 프롬프트, 매핑)
+    매핑 = None
+    return _parse_json_response(응답텍스트)
+
+
+# ============================================================
+# Step 3: 제안 표시 + 승인 (extraction은 메모리 보관)
+# ============================================================
+def 제안확인(분석결과):
+    """💡⚖설명의무 제안만 표시. extraction은 그대로 반환.
+    Returns: (extraction, approved_texts: list[str])
+             approved_texts가 비면 제안 없음 또는 전부 거부."""
+    extraction = 분석결과.get("extraction", {})
+    suggestions = 분석결과.get("suggestions", [])
+    legal = 분석결과.get("legal", [])
+    informed_consent = 분석결과.get("informed_consent", {})
+
+    approved_texts = []
+    has_any = bool(suggestions or legal or informed_consent.get("chart_text"))
+
+    if not has_any:
+        print("\n [AI 검토] 검토 의견 없음")
+        return extraction, approved_texts
+
+    print("\n=== AI 검토 결과 ===")
+
+    # ── AI 검토 의견 (💡) ──
+    if suggestions:
+        print("\n── AI 검토 의견 ──")
+        for i, s in enumerate(suggestions, 1):
+            print(f"  💡 {i}. {s.get('content', '')} ({s.get('reason', '')})")
+            chart_text = s.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 법적 확인사항 (⚖) ──
+    if legal:
+        print("\n── 법적 확인사항 ──")
+        for i, l in enumerate(legal, 1):
+            print(f"  ⚖ {i}. {l.get('content', '')} ({l.get('reason', '')})")
+            chart_text = l.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 설명의무 기록 ──
+    ic_text = informed_consent.get("chart_text", "")
+    if ic_text:
+        drugs = ", ".join(informed_consent.get("drugs", []))
+        se = ", ".join(informed_consent.get("side_effects", []))
+        print(f"\n── 설명의무 기록 ──")
+        if drugs:
+            print(f"   약물: {drugs}  |  부작용: {se}")
+        print(f"   제안: \"{ic_text}\"")
+        if input("   → 차트에 반영할까요? (y/n): ").strip().lower() == "y":
+            approved_texts.append(ic_text)
+
+    return extraction, approved_texts
+
+
+# ============================================================
+# Step 4: 승인된 chart_text를 free-text 아래에 추가 (API 없음)
+# ============================================================
+def 제안_free_text_추가(free_text, approved_texts):
+    """승인된 chart_text들을 free_text 아래에 덧붙인다."""
+    if not approved_texts:
+        return free_text
+    추가문구 = "\n".join(approved_texts)
+    구분선 = "\n---\n" if free_text.strip() else ""
+    return free_text + 구분선 + 추가문구
+
+
+# ============================================================
+# Step 5: 의사 직접 수정
+# ============================================================
+def 의사_최종수정(free_text):
+    """차트를 의사에게 보여주고 직접 수정하게 한다.
+    새 내용 입력 시 교체. 빈 줄 입력 시 원본 그대로 확정."""
+    print("\n=== 최종 차트 확인 ===")
+    print("─" * 50)
+    print(free_text)
+    print("─" * 50)
+    print("수정이 필요하면 전체 내용을 다시 입력하세요.")
+    print("(수정 없이 확정하려면 바로 Enter)")
+
+    줄들 = []
+    while True:
+        줄 = input()
+        if 줄 == "":
+            break
+        줄들.append(줄)
+
+    return "\n".join(줄들) if 줄들 else free_text
+
+
+# ============================================================
+# Step 6 내부: 추출 데이터 요약 표시
+# ============================================================
+def _추출데이터_요약표시(extraction):
+    """추출된 데이터를 한눈에 보기 출력"""
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"  [생활습관] {', '.join(항목들)}")
+
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"  [진단] {목록}")
+
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"  [검사결과] {목록}")
+
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"  [영상검사] {목록}")
+
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"  [처방] {목록}")
+
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"  [추적계획] {목록}")
+
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"  [검사처방] {목록}")
+
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"  [처방요약] {ps}")
+
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if 변경 and 변경.get("변경유형") and 변경.get("새값"):
+            print(f"  [환자정보-{항목}] ({변경['변경유형']}) {변경.get('새값', '')}")
+
+
+# ============================================================
+# Step 6 내부: 항목별 y/n 승인
+# ============================================================
+def _추출데이터_항목별_승인(extraction):
+    """항목별 카테고리 단위로 y/n 질문. Returns: approved_data dict"""
+    approved = {}
+
+    # 활력징후
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기", "심박수", "키", "몸무게"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"\n  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["vitals"] = vitals
+
+    # 생활습관
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"\n  [생활습관] {', '.join(항목들)}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lifestyle"] = lifestyle
+
+    # 진단
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"\n  [진단] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["diagnoses"] = diagnoses
+
+    # 검사결과
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"\n  [검사결과] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lab_results"] = labs
+
+    # 영상검사
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"\n  [영상검사] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["imaging"] = imaging
+
+    # 처방
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"\n  [처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescriptions"] = prescriptions
+
+    # 추적계획
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"\n  [추적계획] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["tracking"] = tracking
+
+    # 검사처방
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"\n  [검사처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["test_orders"] = test_orders
+
+    # 처방요약
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"\n  [처방요약] {ps}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescription_summary"] = ps
+
+    # 환자정보
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if not 변경 or not 변경.get("변경유형"):
+            continue
+        유형표시 = {"add": "추가", "modify": "수정", "remove": "삭제"}.get(변경.get("변경유형", ""), "변경")
+        print(f"\n  [환자정보-{항목}] ({유형표시}) {변경.get('기존값', '')} → {변경.get('새값', '')}")
+        if 변경.get("근거"):
+            print(f"     근거: {변경['근거']}")
+        if input("  → 업데이트할까요? (y/n): ").strip().lower() == "y":
+            if "patient_info" not in approved:
+                approved["patient_info"] = {}
+            approved["patient_info"][항목] = 변경
+
+    return approved
+
+
+# ============================================================
+# Step 6: 2번째 API — 재추출 (선택적)
+# ============================================================
+def 재추출(환자id, final_free_text, 방문일):
+    """최종 확정 free-text로 데이터만 재추출 (2번째 API).
+    Returns: extraction dict or None"""
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_text = final_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else final_free_text
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[최종 확정 차트]
+{익명_text}
+
+위 최종 차트에서 데이터를 추출하세요."""
+
+    응답텍스트 = _익명화_api호출(REEXTRACT_SYSTEM, 프롬프트, 매핑)
+    매핑 = None
+    결과 = _parse_json_response(응답텍스트)
+    if 결과:
+        return 결과.get("extraction", 결과)
+    return None
+
+
+# ============================================================
+# Step 7: 테이블 저장
+# ============================================================
+def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
+    """승인된 항목을 유형별로 테이블에 저장. Returns: 저장건수"""
+    저장건수 = 0
+
+    # --- 방문 테이블 일괄 업데이트 (free_text, 활력징후, 생활습관, 처방요약) ---
+    # 방문기록수정()을 여러 번 호출하면 매번 새 레코드가 생성되므로
+    # 한 번의 UPDATE로 처리하여 불필요한 레코드 복사 방지
+    방문_업데이트 = {}
+    vitals = approved_data.get("vitals", {})
+    lifestyle = approved_data.get("lifestyle", {})
+    ps = approved_data.get("prescription_summary", "")
+
+    if final_free_text:
+        방문_업데이트["free_text"] = final_free_text
+    for 필드 in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"]:
+        if vitals.get(필드) is not None:
+            방문_업데이트[필드] = vitals[필드]
+    for 필드 in ["흡연", "음주", "운동"]:
+        if lifestyle.get(필드):
+            방문_업데이트[필드] = lifestyle[필드]
+    if ps:
+        방문_업데이트["처방요약"] = ps
+
+    if 방문_업데이트:
+        방문기록_일괄수정(방문id, 방문_업데이트)
+        저장건수 += 1
+        if final_free_text:
+            print(f"  → free_text 저장 완료")
+        if vitals:
+            bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+            print(f"  → 활력징후 저장: {bp}")
+        if lifestyle:
+            print(f"  → 생활습관 저장 완료")
+        if ps:
+            print(f"  → 처방요약 저장: {ps[:40]}{'...' if len(ps) > 40 else ''}")
+
+    # --- 진단 ---
+    for d in approved_data.get("diagnoses", []):
+        진단추가(환자id, 방문id, d["진단명"], d.get("상태", "활성"), d.get("비고", ""), d.get("표준코드", None))
+        저장건수 += 1
+        print(f"  → 진단 저장: {d['진단명']} ({d.get('상태', '')})")
+
+    # --- 검사결과 ---
+    for k in approved_data.get("lab_results", []):
+        검사결과추가(환자id, k.get("검사시행일", ""), k["검사항목"], k.get("결과값", ""),
+                   k.get("단위", ""), k.get("참고범위", ""), 방문id=방문id)
+        _검사처방_시행완료_매칭(환자id, k.get("검사시행일", ""), k["검사항목"])
+        저장건수 += 1
+        print(f"  → 검사결과 저장: {k['검사항목']} {k.get('결과값', '')}")
+
+    # --- 영상검사 ---
+    for e in approved_data.get("imaging", []):
+        영상검사추가(환자id, e.get("검사시행일", ""), e["검사종류"], e.get("결과요약", ""),
+                   e.get("주요수치", ""), 방문id=방문id)
+        저장건수 += 1
+        print(f"  → 영상검사 저장: {e['검사종류']}")
+
+    # --- 처방 ---
+    for p in approved_data.get("prescriptions", []):
+        처방추가(환자id, 방문id, p.get("약품명", ""), p.get("성분명", ""), p.get("용량", ""), p.get("용법", ""), p.get("일수", 0))
+        저장건수 += 1
+        print(f"  → 처방 저장: {p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')}")
+
+    # --- 추적계획 ---
+    for t in approved_data.get("tracking", []):
+        추적계획추가(환자id, 방문id, t.get("예정일", ""), t.get("내용", ""))
+        저장건수 += 1
+        print(f"  → 추적계획 저장: {t.get('내용', '')}")
+
+    # --- 검사처방 ---
+    # 처방일 fallback: AI가 처방일을 비워둔 경우 방문일로 대체
+    _방문일_fallback = ""
+    if approved_data.get("test_orders"):
+        _conn = sqlite3.connect(DB경로)
+        try:
+            row = _conn.execute(
+                "SELECT 방문일 FROM 방문 WHERE 방문id=? AND 유효여부=1", (방문id,)
+            ).fetchone()
+            if row:
+                _방문일_fallback = row[0]
+        finally:
+            _conn.close()
+
+    for o in approved_data.get("test_orders", []):
+        처방일 = o.get("처방일", "") or _방문일_fallback
+        검사처방추가(환자id, 방문id, o.get("검사명", ""), 처방일)
+        저장건수 += 1
+        print(f"  → 검사처방 저장: {o.get('검사명', '')} (예정: {처방일})")
+
+    # --- 환자정보 업데이트 ---
+    기존환자 = 환자전체기록조회(환자id)
+    for 항목명, 변경 in approved_data.get("patient_info", {}).items():
+        변경유형 = 변경.get("변경유형", "")
+        새값 = 변경.get("새값", "")
+        기존값 = 기존환자["환자"].get(항목명, "") if 기존환자 else ""
+
+        if 변경유형 == "add":
+            최종값 = (기존값 + ", " + 새값).strip(", ") if 기존값 else 새값
+        elif 변경유형 == "modify":
+            최종값 = 새값
+        elif 변경유형 == "remove":
+            최종값 = ""
+        else:
+            continue
+
+        환자정보수정(환자id, 항목명, 최종값)
+        저장건수 += 1
+        print(f"  → {항목명} 업데이트: {최종값}")
+
+    return 저장건수
+
+
+# ============================================================
+# 전체 흐름 orchestrator (main_system.py에서 호출)
+# ============================================================
+def 차트분석_저장_전체흐름(환자id, 방문id, free_text, 방문일=None):
+    """Steps 2~7 전체 실행.
+    방문id는 호출 전에 미리 생성되어 있어야 함.
+    Returns: (final_free_text, 저장건수) or (None, 0) on failure"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    # Step 2: AI 분석
+    print("\n [AI 분석 중...]")
+    분석결과 = 차트분석(환자id, free_text, 방문일)
+    if not 분석결과:
+        print(" [오류] AI 분석 실패")
+        return None, 0
+
+    # Step 3: 제안 확인 (extraction 메모리 보관)
+    extraction, approved_texts = 제안확인(분석결과)
+
+    # Step 4 & 5: 제안이 있고 승인된 것이 있으면 붙이고 의사 수정
+    final_free_text = free_text
+    if approved_texts:
+        final_free_text = 제안_free_text_추가(free_text, approved_texts)
+        final_free_text = 의사_최종수정(final_free_text)
+    # 제안 없으면 Steps 4, 5 건너뜀
+
+    # Step 6: 추출 데이터 표시 → 재분석 여부 선택
+    print("\n=== 테이블 저장 데이터 (최초 분석 기준) ===")
+    _추출데이터_요약표시(extraction)
+
+    재분석 = input("\n차트 수정으로 데이터가 바뀌었나요? AI로 재분석할까요? (y/n): ").strip().lower()
+    if 재분석 == "y":
+        print(" [재분석 중...]")
+        재추출결과 = 재추출(환자id, final_free_text, 방문일)
+        if 재추출결과:
+            extraction = 재추출결과
+            print(" [재분석 완료]")
+        else:
+            print(" [경고] 재분석 실패. 최초 추출 데이터 사용.")
+
+    # 항목별 승인
+    print("\n=== 항목별 저장 승인 ===")
+    approved_data = _추출데이터_항목별_승인(extraction)
+
+    # Step 7: 저장
+    print("\n [저장 중...]")
+    저장건수 = 분석결과_저장(환자id, 방문id, final_free_text, approved_data)
+    print(f"\n 총 {저장건수}건 저장 완료.")
+
+    return final_free_text, 저장건수
+
+
+# ============================================================
+# 헬퍼: 검사처방 시행완료 자동 매칭
+# ============================================================
+def _검사처방_시행완료_매칭(환자id, 검사시행일, 검사항목):
+    """검사결과 저장 시 매칭되는 미시행 검사처방을 시행여부=1로 업데이트."""
+    conn = sqlite3.connect(DB경로)
+    try:
+        미시행 = conn.execute(
+            "SELECT 처방검사id, 검사명 FROM 검사처방 "
+            "WHERE 환자id=? AND 시행여부=0 AND 유효여부=1",
+            (환자id,)
+        ).fetchall()
+        for row in 미시행:
+            처방검사id, 검사명 = row[0], row[1]
+            if 검사항목 in 검사명 or 검사명 in 검사항목:
+                conn.execute(
+                    "UPDATE 검사처방 SET 시행여부=1 WHERE 처방검사id=?",
+                    (처방검사id,)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 차트 수정 함수 (기존 차트분석_저장_전체흐름()과 별개)
+# ============================================================
+def _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일):
+    """free-text 수정 전후를 비교하여 변경사항만 추출한다. 저장하지 않음.
+    Returns: dict (변경, 추가, 삭제, 활력징후_변경, 처방요약_변경) 또는 None"""
+
+    시스템_프롬프트 = """당신은 의료 차트 데이터 비교 어시스턴트입니다.
+수정 전후의 free-text를 비교하여 변경된 의료 데이터만 추출하세요.
+새로운 제안이나 검토 의견은 절대 하지 마세요.
+변경/추가/삭제된 데이터만 JSON으로 출력하세요.
+
+JSON 형식:
+{
+  "변경": [
+    {"테이블": "검사결과", "기존": {"검사항목": "HbA1c", "결과값": "9.5"}, "수정후": {"검사항목": "HbA1c", "결과값": "8.5"}, "검사시행일": "260301"}
+  ],
+  "추가": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "TG", "결과값": "150", "단위": "mg/dL", "검사시행일": "260301"}}
+  ],
+  "삭제": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "LDL", "결과값": "160", "검사시행일": "260301"}}
+  ],
+  "활력징후_변경": {"수축기": 140, "이완기": 88} 또는 null,
+  "처방요약_변경": "변경된 처방요약" 또는 null
+}
+변경이 없는 항목은 빈 배열로.
+활력징후_변경, 처방요약_변경은 변경 없으면 null로.
+순수 JSON만 출력. 마크다운이나 설명 없이."""
+
+    프롬프트 = f"""[방문일: {방문일}]
+
+[수정 전 free-text]
+{기존_free_text}
+
+[수정 후 free-text]
+{새_free_text}
+
+위 두 텍스트를 비교하여 변경된 의료 데이터만 추출하세요."""
+
+    # 익명화 처리
+    기록 = 환자전체기록조회(환자id)
+    if 기록:
+        익명기록, 매핑 = api_익명화(기록)
+        랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+        실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+        익명_기존 = 기존_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 기존_free_text
+        익명_새 = 새_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 새_free_text
+        익명_프롬프트 = 프롬프트.replace(기존_free_text, 익명_기존).replace(새_free_text, 익명_새)
+    else:
+        매핑 = {}
+        익명_프롬프트 = 프롬프트
+
+    # API 호출
+    응답 = _익명화_api호출(시스템_프롬프트, 익명_프롬프트, 매핑)
+    매핑 = None  # 매핑 메모리 해제
+
+    if not 응답:
+        return None
+
+    변경사항 = _parse_json_response(응답)
+    return 변경사항  # 파싱 실패 시 None, 성공 시 dict
+
+
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None):
+    """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
+    AI 제안/검토 의견 없음. 데이터 변경분만 처리.
+    변경사항이 이미 있으면 그대로 사용, 없으면 새로 추출.
+    Returns: (변경사항_요약, 변경건수)"""
+
+    if 변경사항 is None:
+        변경사항 = _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일)
+    if not 변경사항:
+        return "변경사항 추출 실패", 0
+
+    변경건수 = 0
+    변경요약 = []
+    conn = sqlite3.connect(DB경로)
+
+    try:
+        # free-text 자체 업데이트
+        방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+        # 활력징후 변경
+        vs = 변경사항.get("활력징후_변경")
+        if vs:
+            필드 = {k: vs[k] for k in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"] if vs.get(k) is not None}
+            if 필드:
+                방문기록_일괄수정(방문id, 필드)
+                변경건수 += 1
+                변경요약.append(f"활력징후 수정: {필드}")
+
+        # 처방요약 변경
+        if 변경사항.get("처방요약_변경"):
+            방문기록_일괄수정(방문id, {"처방요약": 변경사항["처방요약_변경"]})
+            변경건수 += 1
+            변경요약.append("처방요약 수정")
+
+        # 변경된 항목 처리 (기존 무효화 + 새 레코드)
+        for 항목 in 변경사항.get("변경", []):
+            테이블 = 항목.get("테이블", "")
+            기존 = 항목.get("기존", {})
+            수정후 = 항목.get("수정후", {})
+            시행일 = 항목.get("검사시행일", 방문일)
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 기존.get("검사항목"), 기존.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text 수정' WHERE 검사id=?", (r[0],))
+                conn.commit()
+                검사결과추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사항목", 기존.get("검사항목")),
+                           수정후.get("결과값", ""), 수정후.get("단위", ""), 수정후.get("참고범위", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"검사결과 수정: {기존.get('검사항목')} {기존.get('결과값')} → {수정후.get('결과값')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text 수정' WHERE 진단id=?", (r[0],))
+                conn.commit()
+                진단추가(환자id, 방문id, 수정후.get("진단명", 기존.get("진단명")),
+                        수정후.get("상태", "활성"), 수정후.get("비고", ""), 수정후.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 수정: {기존.get('진단명')} → {수정후.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text 수정' WHERE 처방id=?", (r[0],))
+                conn.commit()
+                처방추가(환자id, 방문id, 수정후.get("약품명", 기존.get("약품명")),
+                        수정후.get("성분명", ""), 수정후.get("용량", ""),
+                        수정후.get("용법", ""), 수정후.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 수정: {기존.get('약품명')} → {수정후.get('약품명')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 기존.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text 수정' WHERE 영상id=?", (r[0],))
+                conn.commit()
+                영상검사추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사종류", 기존.get("검사종류")),
+                           수정후.get("결과요약", ""), 수정후.get("주요수치", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 수정: {기존.get('검사종류')}")
+
+        # 추가된 항목 처리
+        for 항목 in 변경사항.get("추가", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                검사결과추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사항목"), 데이터.get("결과값", ""),
+                           데이터.get("단위", ""), 데이터.get("참고범위", ""),
+                           방문id=방문id)
+                _검사처방_시행완료_매칭(환자id, 데이터.get("검사시행일", 방문일), 데이터.get("검사항목", ""))
+                변경건수 += 1
+                변경요약.append(f"검사결과 추가: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                영상검사추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사종류"), 데이터.get("결과요약", ""),
+                           데이터.get("주요수치", ""), 방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 추가: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                진단추가(환자id, 방문id, 데이터.get("진단명"), 데이터.get("상태", "활성"),
+                        데이터.get("비고", ""), 데이터.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 추가: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                처방추가(환자id, 방문id, 데이터.get("약품명"), 데이터.get("성분명", ""),
+                        데이터.get("용량", ""), 데이터.get("용법", ""), 데이터.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 추가: {데이터.get('약품명')}")
+
+            elif 테이블 == "추적계획":
+                추적계획추가(환자id, 방문id, 데이터.get("예정일", ""), 데이터.get("내용", ""))
+                변경건수 += 1
+                변경요약.append(f"추적계획 추가: {데이터.get('내용')}")
+
+            elif 테이블 == "검사처방":
+                검사처방추가(환자id, 방문id, 데이터.get("검사명", ""), 데이터.get("처방일", ""))
+                변경건수 += 1
+                변경요약.append(f"검사처방 추가: {데이터.get('검사명')}")
+
+        # 삭제된 항목 처리 (무효화)
+        for 항목 in 변경사항.get("삭제", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사항목"), 데이터.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 검사id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"검사결과 삭제: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 영상id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"영상검사 삭제: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 진단id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"진단 삭제: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 처방id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"처방 삭제: {데이터.get('약품명')}")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return f"업데이트 오류: {e}", 0
+    finally:
+        conn.close()
+
+    요약텍스트 = "\n".join(변경요약) if 변경요약 else "변경사항 없음"
+    return 요약텍스트, 변경건수
+
+
+def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
+    """free-text 수정 후 AI 재분석. 기존 데이터 무효화 후 재추출/저장.
+    Streamlit 호환 (input() 사용 안 함).
+    Returns: (extraction_data, 저장건수) or (None, 0)"""
+
+    # 1. 이 방문에 연결된 기존 데이터 전부 무효화
+    conn = sqlite3.connect(DB경로)
+    try:
+        for 테이블 in ["진단", "추적계획", "처방", "검사처방"]:
+            conn.execute(
+                f"UPDATE {테이블} SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+                (방문id,)
+            )
+        conn.execute(
+            "UPDATE 검사결과 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.execute(
+            "UPDATE 영상검사 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 2. free-text 업데이트
+    방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+    # 3. AI 재분석 (차트분석 함수 직접 호출, input() 없음)
+    분석결과 = 차트분석(환자id, 새_free_text, 방문일)
+    if not 분석결과:
+        return None, 0
+
+    extraction = 분석결과.get("extraction", {})
+    if not extraction:
+        return None, 0
+
+    # 4. 전체 항목 자동 승인하여 저장
+    approved_data = {}
+    approved_data["vitals"] = extraction.get("vitals", {})
+    approved_data["lifestyle"] = extraction.get("lifestyle", {})
+    approved_data["diagnoses"] = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    approved_data["lab_results"] = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    approved_data["imaging"] = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    approved_data["prescriptions"] = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    approved_data["tracking"] = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    approved_data["test_orders"] = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    approved_data["prescription_summary"] = extraction.get("prescription_summary", "")
+    approved_data["patient_info"] = {k: v for k, v in extraction.get("patient_info", {}).items() if v and v.get("변경유형")}
+
+    저장건수 = 분석결과_저장(환자id, 방문id, 새_free_text, approved_data)
+    방문기록_일괄수정(방문id, {"분석완료": 1})
+
+    return extraction, 저장건수
+def _parse_json_response(text):
+    """AI 응답에서 JSON 파싱 (마크다운 코드블록 제거 포함)"""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f" [오류] AI 응답을 JSON으로 파싱할 수 없습니다.")
+        print(f" 원본 응답:\n{text[:500]}")
+        return None
+
+
+
+def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
+    """익명화된 프롬프트로 API 호출 후 복원. Returns: 응답텍스트 or None"""
+    응답 = api_재시도(lambda: client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=max_tokens,
+        temperature=0.1,
+        system=system,
+        messages=[{"role": "user", "content": 프롬프트}]
+    ))
+    if not 응답:
+        return None
+    텍스트 = api_복원(응답.content[0].text.strip(), 매핑)
+    return 텍스트
+
+
+# ============================================================
+# 공공 DB 조회 헬퍼 (차트분석 내부용)
+# ============================================================
+
+# 흔한 내과 진단명 → 영문 변환 테이블
+_진단명_영문 = {
+    "고혈압": "hypertension",
+    "고지혈증": "dyslipidemia",
+    "당뇨": "diabetes mellitus",
+    "당뇨전단계": "prediabetes",
+    "갑상선기능저하증": "hypothyroidism",
+    "갑상선기능항진증": "hyperthyroidism",
+    "통풍": "gout",
+    "골다공증": "osteoporosis",
+    "만성콩팥병": "chronic kidney disease",
+    "심방세동": "atrial fibrillation",
+    "심부전": "heart failure",
+    "관상동맥질환": "coronary artery disease",
+    "뇌졸중": "stroke",
+    "빈혈": "anemia",
+    "지방간": "fatty liver",
+}
+
+
+def _free_text에서_약품명_추출(free_text):
+    """free-text에서 약품명 패턴 간단 추출 (영문 소문자 + 숫자mg 조합).
+    완벽하지 않아도 됨 — AI가 나중에 정확히 추출함."""
+    import re
+    패턴 = r'\b[a-z]{4,}(?:\s*\d+\s*mg)?\b'
+    후보 = re.findall(패턴, free_text.lower())
+    제외목록 = {"with", "that", "this", "from", "have", "been", "will", "also",
+               "than", "more", "less", "after", "before", "normal", "blood",
+               "free", "text", "note", "plan", "done", "left", "right"}
+    seen = set()
+    약품목록 = []
+    for w in 후보:
+        w = w.strip()
+        if w not in seen and w not in 제외목록:
+            seen.add(w)
+            약품목록.append(w)
+        if len(약품목록) >= 5:
+            break
+    return 약품목록
+
+
+def _free_text에서_pubmed_검색어_추출(free_text):
+    """free-text에서 진단명을 찾아 영문 검색어 생성."""
+    for 한글, 영문 in _진단명_영문.items():
+        if 한글 in free_text:
+            return f"{영문} treatment guideline"
+    return None
+
+
+def _공공DB_조회(free_text):
+    """처방 안전성(DUR/e약은요/급여) + PubMed 조회.
+    Returns: (공공DB결과_문자열, 조회성공여부)"""
+    try:
+        약품목록 = _free_text에서_약품명_추출(free_text)
+        검색어 = _free_text에서_pubmed_검색어_추출(free_text)
+
+        안전성결과 = 처방_안전성_조회(약품목록) if 약품목록 else {}
+        pubmed결과 = pubmed_검색(검색어) if 검색어 else []
+
+        dur_정보 = {약품: v["dur"] for 약품, v in 안전성결과.items()}
+        약품정보 = {약품: v["약품정보"] for 약품, v in 안전성결과.items()}
+        급여정보 = {약품: v["급여정보"] for 약품, v in 안전성결과.items()}
+
+        조회결과 = (
+            "[공공 DB 조회 결과 — 참고하여 검토 의견에 반영하세요]\n\n"
+            "[DUR 정보]\n" + json.dumps(dur_정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[약품 정보 (e약은요)]\n" + json.dumps(약품정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[급여 정보]\n" + json.dumps(급여정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[PubMed 검색 결과]\n" + json.dumps(pubmed결과, ensure_ascii=False, indent=2) + "\n\n"
+            "위 정보를 검토 의견(💡), 법적 확인(⚖), 설명의무에 활용하세요.\n"
+            "DUR에서 병용금기가 발견되면 반드시 ⚖ 법적 확인사항에 포함하세요.\n"
+            "PubMed 논문은 관련 있는 것만 검토 의견에 포함하세요.\n"
+            "급여 정보가 있으면 처방 관련 제안에 급여 여부를 명시하세요."
+        )
+
+        return 조회결과, True
+
+    except Exception as e:
+        print(f"  ⚠ 공공 DB 조회 실패: {e}")
+        return "[공공 DB 조회 결과 — 조회 실패 또는 해당 정보 없음. 내부 지식으로 판단하세요.]", False
+
+
+# ============================================================
+# Step 2: 1번째 API — 분석 + 추출 + 제안
+# ============================================================
+def 차트분석(환자id, free_text, 방문일=None):
+    """AI 분석: 데이터 추출 + 검토의견 + 법적확인 + 설명의무 전부 수행.
+    Returns: dict(extraction, suggestions, legal, informed_consent) or None"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    나이 = 나이계산(기록["환자"]["생년월일"])
+    if 나이 is not None:
+        기록["환자"]["나이"] = f"{나이}세"
+
+    # 공공 DB 조회 (AI API 호출 전)
+    공공DB_문자열, 조회성공 = _공공DB_조회(free_text)
+    if not 조회성공:
+        print("  ⚠ 공공 DB 조회 실패. AI 내부 지식으로 검토합니다.")
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_free_text = free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else free_text
+
+    패턴요약 = 의사패턴_요약생성()
+    패턴요약_섹션 = f"\n[의사 진료 패턴 — 참고하여 맥락에 맞는 검토 의견 제시에 활용]\n{패턴요약}\n" if 패턴요약 else ""
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[오늘 free-text]
+{익명_free_text}
+
+{공공DB_문자열}{패턴요약_섹션}
+위 free-text를 분석하여 기존 데이터와 비교한 뒤, 지정된 JSON 형식으로 출력하세요."""
+
+    응답텍스트 = _익명화_api호출(SYSTEM_PROMPT, 프롬프트, 매핑)
+    매핑 = None
+    return _parse_json_response(응답텍스트)
+
+
+# ============================================================
+# Step 3: 제안 표시 + 승인 (extraction은 메모리 보관)
+# ============================================================
+def 제안확인(분석결과):
+    """💡⚖설명의무 제안만 표시. extraction은 그대로 반환.
+    Returns: (extraction, approved_texts: list[str])
+             approved_texts가 비면 제안 없음 또는 전부 거부."""
+    extraction = 분석결과.get("extraction", {})
+    suggestions = 분석결과.get("suggestions", [])
+    legal = 분석결과.get("legal", [])
+    informed_consent = 분석결과.get("informed_consent", {})
+
+    approved_texts = []
+    has_any = bool(suggestions or legal or informed_consent.get("chart_text"))
+
+    if not has_any:
+        print("\n [AI 검토] 검토 의견 없음")
+        return extraction, approved_texts
+
+    print("\n=== AI 검토 결과 ===")
+
+    # ── AI 검토 의견 (💡) ──
+    if suggestions:
+        print("\n── AI 검토 의견 ──")
+        for i, s in enumerate(suggestions, 1):
+            print(f"  💡 {i}. {s.get('content', '')} ({s.get('reason', '')})")
+            chart_text = s.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 법적 확인사항 (⚖) ──
+    if legal:
+        print("\n── 법적 확인사항 ──")
+        for i, l in enumerate(legal, 1):
+            print(f"  ⚖ {i}. {l.get('content', '')} ({l.get('reason', '')})")
+            chart_text = l.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 설명의무 기록 ──
+    ic_text = informed_consent.get("chart_text", "")
+    if ic_text:
+        drugs = ", ".join(informed_consent.get("drugs", []))
+        se = ", ".join(informed_consent.get("side_effects", []))
+        print(f"\n── 설명의무 기록 ──")
+        if drugs:
+            print(f"   약물: {drugs}  |  부작용: {se}")
+        print(f"   제안: \"{ic_text}\"")
+        if input("   → 차트에 반영할까요? (y/n): ").strip().lower() == "y":
+            approved_texts.append(ic_text)
+
+    return extraction, approved_texts
+
+
+# ============================================================
+# Step 4: 승인된 chart_text를 free-text 아래에 추가 (API 없음)
+# ============================================================
+def 제안_free_text_추가(free_text, approved_texts):
+    """승인된 chart_text들을 free_text 아래에 덧붙인다."""
+    if not approved_texts:
+        return free_text
+    추가문구 = "\n".join(approved_texts)
+    구분선 = "\n---\n" if free_text.strip() else ""
+    return free_text + 구분선 + 추가문구
+
+
+# ============================================================
+# Step 5: 의사 직접 수정
+# ============================================================
+def 의사_최종수정(free_text):
+    """차트를 의사에게 보여주고 직접 수정하게 한다.
+    새 내용 입력 시 교체. 빈 줄 입력 시 원본 그대로 확정."""
+    print("\n=== 최종 차트 확인 ===")
+    print("─" * 50)
+    print(free_text)
+    print("─" * 50)
+    print("수정이 필요하면 전체 내용을 다시 입력하세요.")
+    print("(수정 없이 확정하려면 바로 Enter)")
+
+    줄들 = []
+    while True:
+        줄 = input()
+        if 줄 == "":
+            break
+        줄들.append(줄)
+
+    return "\n".join(줄들) if 줄들 else free_text
+
+
+# ============================================================
+# Step 6 내부: 추출 데이터 요약 표시
+# ============================================================
+def _추출데이터_요약표시(extraction):
+    """추출된 데이터를 한눈에 보기 출력"""
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"  [생활습관] {', '.join(항목들)}")
+
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"  [진단] {목록}")
+
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"  [검사결과] {목록}")
+
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"  [영상검사] {목록}")
+
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"  [처방] {목록}")
+
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"  [추적계획] {목록}")
+
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"  [검사처방] {목록}")
+
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"  [처방요약] {ps}")
+
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if 변경 and 변경.get("변경유형") and 변경.get("새값"):
+            print(f"  [환자정보-{항목}] ({변경['변경유형']}) {변경.get('새값', '')}")
+
+
+# ============================================================
+# Step 6 내부: 항목별 y/n 승인
+# ============================================================
+def _추출데이터_항목별_승인(extraction):
+    """항목별 카테고리 단위로 y/n 질문. Returns: approved_data dict"""
+    approved = {}
+
+    # 활력징후
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기", "심박수", "키", "몸무게"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"\n  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["vitals"] = vitals
+
+    # 생활습관
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"\n  [생활습관] {', '.join(항목들)}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lifestyle"] = lifestyle
+
+    # 진단
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"\n  [진단] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["diagnoses"] = diagnoses
+
+    # 검사결과
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"\n  [검사결과] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lab_results"] = labs
+
+    # 영상검사
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"\n  [영상검사] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["imaging"] = imaging
+
+    # 처방
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"\n  [처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescriptions"] = prescriptions
+
+    # 추적계획
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"\n  [추적계획] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["tracking"] = tracking
+
+    # 검사처방
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"\n  [검사처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["test_orders"] = test_orders
+
+    # 처방요약
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"\n  [처방요약] {ps}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescription_summary"] = ps
+
+    # 환자정보
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if not 변경 or not 변경.get("변경유형"):
+            continue
+        유형표시 = {"add": "추가", "modify": "수정", "remove": "삭제"}.get(변경.get("변경유형", ""), "변경")
+        print(f"\n  [환자정보-{항목}] ({유형표시}) {변경.get('기존값', '')} → {변경.get('새값', '')}")
+        if 변경.get("근거"):
+            print(f"     근거: {변경['근거']}")
+        if input("  → 업데이트할까요? (y/n): ").strip().lower() == "y":
+            if "patient_info" not in approved:
+                approved["patient_info"] = {}
+            approved["patient_info"][항목] = 변경
+
+    return approved
+
+
+# ============================================================
+# Step 6: 2번째 API — 재추출 (선택적)
+# ============================================================
+def 재추출(환자id, final_free_text, 방문일):
+    """최종 확정 free-text로 데이터만 재추출 (2번째 API).
+    Returns: extraction dict or None"""
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_text = final_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else final_free_text
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[최종 확정 차트]
+{익명_text}
+
+위 최종 차트에서 데이터를 추출하세요."""
+
+    응답텍스트 = _익명화_api호출(REEXTRACT_SYSTEM, 프롬프트, 매핑)
+    매핑 = None
+    결과 = _parse_json_response(응답텍스트)
+    if 결과:
+        return 결과.get("extraction", 결과)
+    return None
+
+
+# ============================================================
+# Step 7: 테이블 저장
+# ============================================================
+def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
+    """승인된 항목을 유형별로 테이블에 저장. Returns: 저장건수"""
+    저장건수 = 0
+
+    # --- 방문 테이블 일괄 업데이트 (free_text, 활력징후, 생활습관, 처방요약) ---
+    # 방문기록수정()을 여러 번 호출하면 매번 새 레코드가 생성되므로
+    # 한 번의 UPDATE로 처리하여 불필요한 레코드 복사 방지
+    방문_업데이트 = {}
+    vitals = approved_data.get("vitals", {})
+    lifestyle = approved_data.get("lifestyle", {})
+    ps = approved_data.get("prescription_summary", "")
+
+    if final_free_text:
+        방문_업데이트["free_text"] = final_free_text
+    for 필드 in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"]:
+        if vitals.get(필드) is not None:
+            방문_업데이트[필드] = vitals[필드]
+    for 필드 in ["흡연", "음주", "운동"]:
+        if lifestyle.get(필드):
+            방문_업데이트[필드] = lifestyle[필드]
+    if ps:
+        방문_업데이트["처방요약"] = ps
+
+    if 방문_업데이트:
+        방문기록_일괄수정(방문id, 방문_업데이트)
+        저장건수 += 1
+        if final_free_text:
+            print(f"  → free_text 저장 완료")
+        if vitals:
+            bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+            print(f"  → 활력징후 저장: {bp}")
+        if lifestyle:
+            print(f"  → 생활습관 저장 완료")
+        if ps:
+            print(f"  → 처방요약 저장: {ps[:40]}{'...' if len(ps) > 40 else ''}")
+
+    # --- 진단 ---
+    for d in approved_data.get("diagnoses", []):
+        진단추가(환자id, 방문id, d["진단명"], d.get("상태", "활성"), d.get("비고", ""), d.get("표준코드", None))
+        저장건수 += 1
+        print(f"  → 진단 저장: {d['진단명']} ({d.get('상태', '')})")
+
+    # --- 검사결과 ---
+    for k in approved_data.get("lab_results", []):
+        검사결과추가(환자id, k.get("검사시행일", ""), k["검사항목"], k.get("결과값", ""),
+                   k.get("단위", ""), k.get("참고범위", ""), 방문id=방문id)
+        _검사처방_시행완료_매칭(환자id, k.get("검사시행일", ""), k["검사항목"])
+        저장건수 += 1
+        print(f"  → 검사결과 저장: {k['검사항목']} {k.get('결과값', '')}")
+
+    # --- 영상검사 ---
+    for e in approved_data.get("imaging", []):
+        영상검사추가(환자id, e.get("검사시행일", ""), e["검사종류"], e.get("결과요약", ""),
+                   e.get("주요수치", ""), 방문id=방문id)
+        저장건수 += 1
+        print(f"  → 영상검사 저장: {e['검사종류']}")
+
+    # --- 처방 ---
+    for p in approved_data.get("prescriptions", []):
+        처방추가(환자id, 방문id, p.get("약품명", ""), p.get("성분명", ""), p.get("용량", ""), p.get("용법", ""), p.get("일수", 0))
+        저장건수 += 1
+        print(f"  → 처방 저장: {p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')}")
+
+    # --- 추적계획 ---
+    for t in approved_data.get("tracking", []):
+        추적계획추가(환자id, 방문id, t.get("예정일", ""), t.get("내용", ""))
+        저장건수 += 1
+        print(f"  → 추적계획 저장: {t.get('내용', '')}")
+
+    # --- 검사처방 ---
+    # 처방일 fallback: AI가 처방일을 비워둔 경우 방문일로 대체
+    _방문일_fallback = ""
+    if approved_data.get("test_orders"):
+        _conn = sqlite3.connect(DB경로)
+        try:
+            row = _conn.execute(
+                "SELECT 방문일 FROM 방문 WHERE 방문id=? AND 유효여부=1", (방문id,)
+            ).fetchone()
+            if row:
+                _방문일_fallback = row[0]
+        finally:
+            _conn.close()
+
+    for o in approved_data.get("test_orders", []):
+        처방일 = o.get("처방일", "") or _방문일_fallback
+        검사처방추가(환자id, 방문id, o.get("검사명", ""), 처방일)
+        저장건수 += 1
+        print(f"  → 검사처방 저장: {o.get('검사명', '')} (예정: {처방일})")
+
+    # --- 환자정보 업데이트 ---
+    기존환자 = 환자전체기록조회(환자id)
+    for 항목명, 변경 in approved_data.get("patient_info", {}).items():
+        변경유형 = 변경.get("변경유형", "")
+        새값 = 변경.get("새값", "")
+        기존값 = 기존환자["환자"].get(항목명, "") if 기존환자 else ""
+
+        if 변경유형 == "add":
+            최종값 = (기존값 + ", " + 새값).strip(", ") if 기존값 else 새값
+        elif 변경유형 == "modify":
+            최종값 = 새값
+        elif 변경유형 == "remove":
+            최종값 = ""
+        else:
+            continue
+
+        환자정보수정(환자id, 항목명, 최종값)
+        저장건수 += 1
+        print(f"  → {항목명} 업데이트: {최종값}")
+
+    return 저장건수
+
+
+# ============================================================
+# 전체 흐름 orchestrator (main_system.py에서 호출)
+# ============================================================
+def 차트분석_저장_전체흐름(환자id, 방문id, free_text, 방문일=None):
+    """Steps 2~7 전체 실행.
+    방문id는 호출 전에 미리 생성되어 있어야 함.
+    Returns: (final_free_text, 저장건수) or (None, 0) on failure"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    # Step 2: AI 분석
+    print("\n [AI 분석 중...]")
+    분석결과 = 차트분석(환자id, free_text, 방문일)
+    if not 분석결과:
+        print(" [오류] AI 분석 실패")
+        return None, 0
+
+    # Step 3: 제안 확인 (extraction 메모리 보관)
+    extraction, approved_texts = 제안확인(분석결과)
+
+    # Step 4 & 5: 제안이 있고 승인된 것이 있으면 붙이고 의사 수정
+    final_free_text = free_text
+    if approved_texts:
+        final_free_text = 제안_free_text_추가(free_text, approved_texts)
+        final_free_text = 의사_최종수정(final_free_text)
+    # 제안 없으면 Steps 4, 5 건너뜀
+
+    # Step 6: 추출 데이터 표시 → 재분석 여부 선택
+    print("\n=== 테이블 저장 데이터 (최초 분석 기준) ===")
+    _추출데이터_요약표시(extraction)
+
+    재분석 = input("\n차트 수정으로 데이터가 바뀌었나요? AI로 재분석할까요? (y/n): ").strip().lower()
+    if 재분석 == "y":
+        print(" [재분석 중...]")
+        재추출결과 = 재추출(환자id, final_free_text, 방문일)
+        if 재추출결과:
+            extraction = 재추출결과
+            print(" [재분석 완료]")
+        else:
+            print(" [경고] 재분석 실패. 최초 추출 데이터 사용.")
+
+    # 항목별 승인
+    print("\n=== 항목별 저장 승인 ===")
+    approved_data = _추출데이터_항목별_승인(extraction)
+
+    # Step 7: 저장
+    print("\n [저장 중...]")
+    저장건수 = 분석결과_저장(환자id, 방문id, final_free_text, approved_data)
+    print(f"\n 총 {저장건수}건 저장 완료.")
+
+    return final_free_text, 저장건수
+
+
+# ============================================================
+# 헬퍼: 검사처방 시행완료 자동 매칭
+# ============================================================
+def _검사처방_시행완료_매칭(환자id, 검사시행일, 검사항목):
+    """검사결과 저장 시 매칭되는 미시행 검사처방을 시행여부=1로 업데이트."""
+    conn = sqlite3.connect(DB경로)
+    try:
+        미시행 = conn.execute(
+            "SELECT 처방검사id, 검사명 FROM 검사처방 "
+            "WHERE 환자id=? AND 시행여부=0 AND 유효여부=1",
+            (환자id,)
+        ).fetchall()
+        for row in 미시행:
+            처방검사id, 검사명 = row[0], row[1]
+            if 검사항목 in 검사명 or 검사명 in 검사항목:
+                conn.execute(
+                    "UPDATE 검사처방 SET 시행여부=1 WHERE 처방검사id=?",
+                    (처방검사id,)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 차트 수정 함수 (기존 차트분석_저장_전체흐름()과 별개)
+# ============================================================
+def _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일):
+    """free-text 수정 전후를 비교하여 변경사항만 추출한다. 저장하지 않음.
+    Returns: dict (변경, 추가, 삭제, 활력징후_변경, 처방요약_변경) 또는 None"""
+
+    시스템_프롬프트 = """당신은 의료 차트 데이터 비교 어시스턴트입니다.
+수정 전후의 free-text를 비교하여 변경된 의료 데이터만 추출하세요.
+새로운 제안이나 검토 의견은 절대 하지 마세요.
+변경/추가/삭제된 데이터만 JSON으로 출력하세요.
+
+JSON 형식:
+{
+  "변경": [
+    {"테이블": "검사결과", "기존": {"검사항목": "HbA1c", "결과값": "9.5"}, "수정후": {"검사항목": "HbA1c", "결과값": "8.5"}, "검사시행일": "260301"}
+  ],
+  "추가": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "TG", "결과값": "150", "단위": "mg/dL", "검사시행일": "260301"}}
+  ],
+  "삭제": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "LDL", "결과값": "160", "검사시행일": "260301"}}
+  ],
+  "활력징후_변경": {"수축기": 140, "이완기": 88} 또는 null,
+  "처방요약_변경": "변경된 처방요약" 또는 null
+}
+변경이 없는 항목은 빈 배열로.
+활력징후_변경, 처방요약_변경은 변경 없으면 null로.
+순수 JSON만 출력. 마크다운이나 설명 없이."""
+
+    프롬프트 = f"""[방문일: {방문일}]
+
+[수정 전 free-text]
+{기존_free_text}
+
+[수정 후 free-text]
+{새_free_text}
+
+위 두 텍스트를 비교하여 변경된 의료 데이터만 추출하세요."""
+
+    # 익명화 처리
+    기록 = 환자전체기록조회(환자id)
+    if 기록:
+        익명기록, 매핑 = api_익명화(기록)
+        랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+        실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+        익명_기존 = 기존_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 기존_free_text
+        익명_새 = 새_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 새_free_text
+        익명_프롬프트 = 프롬프트.replace(기존_free_text, 익명_기존).replace(새_free_text, 익명_새)
+    else:
+        매핑 = {}
+        익명_프롬프트 = 프롬프트
+
+    # API 호출
+    응답 = _익명화_api호출(시스템_프롬프트, 익명_프롬프트, 매핑)
+    매핑 = None  # 매핑 메모리 해제
+
+    if not 응답:
+        return None
+
+    변경사항 = _parse_json_response(응답)
+    return 변경사항  # 파싱 실패 시 None, 성공 시 dict
+
+
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None):
+    """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
+    AI 제안/검토 의견 없음. 데이터 변경분만 처리.
+    변경사항이 이미 있으면 그대로 사용, 없으면 새로 추출.
+    Returns: (변경사항_요약, 변경건수)"""
+
+    if 변경사항 is None:
+        변경사항 = _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일)
+    if not 변경사항:
+        return "변경사항 추출 실패", 0
+
+    변경건수 = 0
+    변경요약 = []
+    conn = sqlite3.connect(DB경로)
+
+    try:
+        # free-text 자체 업데이트
+        방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+        # 활력징후 변경
+        vs = 변경사항.get("활력징후_변경")
+        if vs:
+            필드 = {k: vs[k] for k in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"] if vs.get(k) is not None}
+            if 필드:
+                방문기록_일괄수정(방문id, 필드)
+                변경건수 += 1
+                변경요약.append(f"활력징후 수정: {필드}")
+
+        # 처방요약 변경
+        if 변경사항.get("처방요약_변경"):
+            방문기록_일괄수정(방문id, {"처방요약": 변경사항["처방요약_변경"]})
+            변경건수 += 1
+            변경요약.append("처방요약 수정")
+
+        # 변경된 항목 처리 (기존 무효화 + 새 레코드)
+        for 항목 in 변경사항.get("변경", []):
+            테이블 = 항목.get("테이블", "")
+            기존 = 항목.get("기존", {})
+            수정후 = 항목.get("수정후", {})
+            시행일 = 항목.get("검사시행일", 방문일)
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 기존.get("검사항목"), 기존.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text 수정' WHERE 검사id=?", (r[0],))
+                conn.commit()
+                검사결과추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사항목", 기존.get("검사항목")),
+                           수정후.get("결과값", ""), 수정후.get("단위", ""), 수정후.get("참고범위", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"검사결과 수정: {기존.get('검사항목')} {기존.get('결과값')} → {수정후.get('결과값')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text 수정' WHERE 진단id=?", (r[0],))
+                conn.commit()
+                진단추가(환자id, 방문id, 수정후.get("진단명", 기존.get("진단명")),
+                        수정후.get("상태", "활성"), 수정후.get("비고", ""), 수정후.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 수정: {기존.get('진단명')} → {수정후.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text 수정' WHERE 처방id=?", (r[0],))
+                conn.commit()
+                처방추가(환자id, 방문id, 수정후.get("약품명", 기존.get("약품명")),
+                        수정후.get("성분명", ""), 수정후.get("용량", ""),
+                        수정후.get("용법", ""), 수정후.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 수정: {기존.get('약품명')} → {수정후.get('약품명')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 기존.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text 수정' WHERE 영상id=?", (r[0],))
+                conn.commit()
+                영상검사추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사종류", 기존.get("검사종류")),
+                           수정후.get("결과요약", ""), 수정후.get("주요수치", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 수정: {기존.get('검사종류')}")
+
+        # 추가된 항목 처리
+        for 항목 in 변경사항.get("추가", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                검사결과추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사항목"), 데이터.get("결과값", ""),
+                           데이터.get("단위", ""), 데이터.get("참고범위", ""),
+                           방문id=방문id)
+                _검사처방_시행완료_매칭(환자id, 데이터.get("검사시행일", 방문일), 데이터.get("검사항목", ""))
+                변경건수 += 1
+                변경요약.append(f"검사결과 추가: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                영상검사추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사종류"), 데이터.get("결과요약", ""),
+                           데이터.get("주요수치", ""), 방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 추가: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                진단추가(환자id, 방문id, 데이터.get("진단명"), 데이터.get("상태", "활성"),
+                        데이터.get("비고", ""), 데이터.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 추가: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                처방추가(환자id, 방문id, 데이터.get("약품명"), 데이터.get("성분명", ""),
+                        데이터.get("용량", ""), 데이터.get("용법", ""), 데이터.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 추가: {데이터.get('약품명')}")
+
+            elif 테이블 == "추적계획":
+                추적계획추가(환자id, 방문id, 데이터.get("예정일", ""), 데이터.get("내용", ""))
+                변경건수 += 1
+                변경요약.append(f"추적계획 추가: {데이터.get('내용')}")
+
+            elif 테이블 == "검사처방":
+                검사처방추가(환자id, 방문id, 데이터.get("검사명", ""), 데이터.get("처방일", ""))
+                변경건수 += 1
+                변경요약.append(f"검사처방 추가: {데이터.get('검사명')}")
+
+        # 삭제된 항목 처리 (무효화)
+        for 항목 in 변경사항.get("삭제", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사항목"), 데이터.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 검사id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"검사결과 삭제: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 영상id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"영상검사 삭제: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 진단id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"진단 삭제: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 처방id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"처방 삭제: {데이터.get('약품명')}")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return f"업데이트 오류: {e}", 0
+    finally:
+        conn.close()
+
+    요약텍스트 = "\n".join(변경요약) if 변경요약 else "변경사항 없음"
+    return 요약텍스트, 변경건수
+
+
+def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
+    """free-text 수정 후 AI 재분석. 기존 데이터 무효화 후 재추출/저장.
+    Streamlit 호환 (input() 사용 안 함).
+    Returns: (extraction_data, 저장건수) or (None, 0)"""
+
+    # 1. 이 방문에 연결된 기존 데이터 전부 무효화
+    conn = sqlite3.connect(DB경로)
+    try:
+        for 테이블 in ["진단", "추적계획", "처방", "검사처방"]:
+            conn.execute(
+                f"UPDATE {테이블} SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+                (방문id,)
+            )
+        conn.execute(
+            "UPDATE 검사결과 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.execute(
+            "UPDATE 영상검사 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 2. free-text 업데이트
+    방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+    # 3. AI 재분석 (차트분석 함수 직접 호출, input() 없음)
+    분석결과 = 차트분석(환자id, 새_free_text, 방문일)
+    if not 분석결과:
+        return None, 0
+
+    extraction = 분석결과.get("extraction", {})
+    if not extraction:
+        return None, 0
+
+    # 4. 전체 항목 자동 승인하여 저장
+    approved_data = {}
+    approved_data["vitals"] = extraction.get("vitals", {})
+    approved_data["lifestyle"] = extraction.get("lifestyle", {})
+    approved_data["diagnoses"] = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    approved_data["lab_results"] = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    approved_data["imaging"] = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    approved_data["prescriptions"] = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    approved_data["tracking"] = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    approved_data["test_orders"] = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    approved_data["prescription_summary"] = extraction.get("prescription_summary", "")
+    approved_data["patient_info"] = {k: v for k, v in extraction.get("patient_info", {}).items() if v and v.get("변경유형")}
+
+    저장건수 = 분석결과_저장(환자id, 방문id, 새_free_text, approved_data)
+    방문기록_일괄수정(방문id, {"분석완료": 1})
+
+    return extraction, 저장건수
+def _parse_json_response(text):
+    """AI 응답에서 JSON 파싱 (마크다운 코드블록 제거 포함)"""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f" [오류] AI 응답을 JSON으로 파싱할 수 없습니다.")
+        print(f" 원본 응답:\n{text[:500]}")
+        return None
+
+
+
+def _익명화_api호출(system, 프롬프트, 매핑, max_tokens=4096):
+    """익명화된 프롬프트로 API 호출 후 복원. Returns: 응답텍스트 or None"""
+    응답 = api_재시도(lambda: client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=max_tokens,
+        temperature=0.1,
+        system=system,
+        messages=[{"role": "user", "content": 프롬프트}]
+    ))
+    if not 응답:
+        return None
+    텍스트 = api_복원(응답.content[0].text.strip(), 매핑)
+    return 텍스트
+
+
+# ============================================================
+# 공공 DB 조회 헬퍼 (차트분석 내부용)
+# ============================================================
+
+# 흔한 내과 진단명 → 영문 변환 테이블
+_진단명_영문 = {
+    "고혈압": "hypertension",
+    "고지혈증": "dyslipidemia",
+    "당뇨": "diabetes mellitus",
+    "당뇨전단계": "prediabetes",
+    "갑상선기능저하증": "hypothyroidism",
+    "갑상선기능항진증": "hyperthyroidism",
+    "통풍": "gout",
+    "골다공증": "osteoporosis",
+    "만성콩팥병": "chronic kidney disease",
+    "심방세동": "atrial fibrillation",
+    "심부전": "heart failure",
+    "관상동맥질환": "coronary artery disease",
+    "뇌졸중": "stroke",
+    "빈혈": "anemia",
+    "지방간": "fatty liver",
+}
+
+
+def _free_text에서_약품명_추출(free_text):
+    """free-text에서 약품명 패턴 간단 추출 (영문 소문자 + 숫자mg 조합).
+    완벽하지 않아도 됨 — AI가 나중에 정확히 추출함."""
+    import re
+    패턴 = r'\b[a-z]{4,}(?:\s*\d+\s*mg)?\b'
+    후보 = re.findall(패턴, free_text.lower())
+    제외목록 = {"with", "that", "this", "from", "have", "been", "will", "also",
+               "than", "more", "less", "after", "before", "normal", "blood",
+               "free", "text", "note", "plan", "done", "left", "right"}
+    seen = set()
+    약품목록 = []
+    for w in 후보:
+        w = w.strip()
+        if w not in seen and w not in 제외목록:
+            seen.add(w)
+            약품목록.append(w)
+        if len(약품목록) >= 5:
+            break
+    return 약품목록
+
+
+def _free_text에서_pubmed_검색어_추출(free_text):
+    """free-text에서 진단명을 찾아 영문 검색어 생성."""
+    for 한글, 영문 in _진단명_영문.items():
+        if 한글 in free_text:
+            return f"{영문} treatment guideline"
+    return None
+
+
+def _공공DB_조회(free_text):
+    """처방 안전성(DUR/e약은요/급여) + PubMed 조회.
+    Returns: (공공DB결과_문자열, 조회성공여부)"""
+    try:
+        약품목록 = _free_text에서_약품명_추출(free_text)
+        검색어 = _free_text에서_pubmed_검색어_추출(free_text)
+
+        안전성결과 = 처방_안전성_조회(약품목록) if 약품목록 else {}
+        pubmed결과 = pubmed_검색(검색어) if 검색어 else []
+
+        dur_정보 = {약품: v["dur"] for 약품, v in 안전성결과.items()}
+        약품정보 = {약품: v["약품정보"] for 약품, v in 안전성결과.items()}
+        급여정보 = {약품: v["급여정보"] for 약품, v in 안전성결과.items()}
+
+        조회결과 = (
+            "[공공 DB 조회 결과 — 참고하여 검토 의견에 반영하세요]\n\n"
+            "[DUR 정보]\n" + json.dumps(dur_정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[약품 정보 (e약은요)]\n" + json.dumps(약품정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[급여 정보]\n" + json.dumps(급여정보, ensure_ascii=False, indent=2) + "\n\n"
+            "[PubMed 검색 결과]\n" + json.dumps(pubmed결과, ensure_ascii=False, indent=2) + "\n\n"
+            "위 정보를 검토 의견(💡), 법적 확인(⚖), 설명의무에 활용하세요.\n"
+            "DUR에서 병용금기가 발견되면 반드시 ⚖ 법적 확인사항에 포함하세요.\n"
+            "PubMed 논문은 관련 있는 것만 검토 의견에 포함하세요.\n"
+            "급여 정보가 있으면 처방 관련 제안에 급여 여부를 명시하세요."
+        )
+
+        return 조회결과, True
+
+    except Exception as e:
+        print(f"  ⚠ 공공 DB 조회 실패: {e}")
+        return "[공공 DB 조회 결과 — 조회 실패 또는 해당 정보 없음. 내부 지식으로 판단하세요.]", False
+
+
+# ============================================================
+# Step 2: 1번째 API — 분석 + 추출 + 제안
+# ============================================================
+def 차트분석(환자id, free_text, 방문일=None):
+    """AI 분석: 데이터 추출 + 검토의견 + 법적확인 + 설명의무 전부 수행.
+    Returns: dict(extraction, suggestions, legal, informed_consent) or None"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    나이 = 나이계산(기록["환자"]["생년월일"])
+    if 나이 is not None:
+        기록["환자"]["나이"] = f"{나이}세"
+
+    # 공공 DB 조회 (AI API 호출 전)
+    공공DB_문자열, 조회성공 = _공공DB_조회(free_text)
+    if not 조회성공:
+        print("  ⚠ 공공 DB 조회 실패. AI 내부 지식으로 검토합니다.")
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_free_text = free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else free_text
+
+    패턴요약 = 의사패턴_요약생성()
+    패턴요약_섹션 = f"\n[의사 진료 패턴 — 참고하여 맥락에 맞는 검토 의견 제시에 활용]\n{패턴요약}\n" if 패턴요약 else ""
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[오늘 free-text]
+{익명_free_text}
+
+{공공DB_문자열}{패턴요약_섹션}
+위 free-text를 분석하여 기존 데이터와 비교한 뒤, 지정된 JSON 형식으로 출력하세요."""
+
+    응답텍스트 = _익명화_api호출(SYSTEM_PROMPT, 프롬프트, 매핑)
+    매핑 = None
+    return _parse_json_response(응답텍스트)
+
+
+# ============================================================
+# Step 3: 제안 표시 + 승인 (extraction은 메모리 보관)
+# ============================================================
+def 제안확인(분석결과):
+    """💡⚖설명의무 제안만 표시. extraction은 그대로 반환.
+    Returns: (extraction, approved_texts: list[str])
+             approved_texts가 비면 제안 없음 또는 전부 거부."""
+    extraction = 분석결과.get("extraction", {})
+    suggestions = 분석결과.get("suggestions", [])
+    legal = 분석결과.get("legal", [])
+    informed_consent = 분석결과.get("informed_consent", {})
+
+    approved_texts = []
+    has_any = bool(suggestions or legal or informed_consent.get("chart_text"))
+
+    if not has_any:
+        print("\n [AI 검토] 검토 의견 없음")
+        return extraction, approved_texts
+
+    print("\n=== AI 검토 결과 ===")
+
+    # ── AI 검토 의견 (💡) ──
+    if suggestions:
+        print("\n── AI 검토 의견 ──")
+        for i, s in enumerate(suggestions, 1):
+            print(f"  💡 {i}. {s.get('content', '')} ({s.get('reason', '')})")
+            chart_text = s.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 법적 확인사항 (⚖) ──
+    if legal:
+        print("\n── 법적 확인사항 ──")
+        for i, l in enumerate(legal, 1):
+            print(f"  ⚖ {i}. {l.get('content', '')} ({l.get('reason', '')})")
+            chart_text = l.get("chart_text", "")
+            if chart_text:
+                print(f"     제안: \"{chart_text}\"")
+            if input("     → 차트에 반영할까요? (y/n): ").strip().lower() == "y" and chart_text:
+                approved_texts.append(chart_text)
+
+    # ── 설명의무 기록 ──
+    ic_text = informed_consent.get("chart_text", "")
+    if ic_text:
+        drugs = ", ".join(informed_consent.get("drugs", []))
+        se = ", ".join(informed_consent.get("side_effects", []))
+        print(f"\n── 설명의무 기록 ──")
+        if drugs:
+            print(f"   약물: {drugs}  |  부작용: {se}")
+        print(f"   제안: \"{ic_text}\"")
+        if input("   → 차트에 반영할까요? (y/n): ").strip().lower() == "y":
+            approved_texts.append(ic_text)
+
+    return extraction, approved_texts
+
+
+# ============================================================
+# Step 4: 승인된 chart_text를 free-text 아래에 추가 (API 없음)
+# ============================================================
+def 제안_free_text_추가(free_text, approved_texts):
+    """승인된 chart_text들을 free_text 아래에 덧붙인다."""
+    if not approved_texts:
+        return free_text
+    추가문구 = "\n".join(approved_texts)
+    구분선 = "\n---\n" if free_text.strip() else ""
+    return free_text + 구분선 + 추가문구
+
+
+# ============================================================
+# Step 5: 의사 직접 수정
+# ============================================================
+def 의사_최종수정(free_text):
+    """차트를 의사에게 보여주고 직접 수정하게 한다.
+    새 내용 입력 시 교체. 빈 줄 입력 시 원본 그대로 확정."""
+    print("\n=== 최종 차트 확인 ===")
+    print("─" * 50)
+    print(free_text)
+    print("─" * 50)
+    print("수정이 필요하면 전체 내용을 다시 입력하세요.")
+    print("(수정 없이 확정하려면 바로 Enter)")
+
+    줄들 = []
+    while True:
+        줄 = input()
+        if 줄 == "":
+            break
+        줄들.append(줄)
+
+    return "\n".join(줄들) if 줄들 else free_text
+
+
+# ============================================================
+# Step 6 내부: 추출 데이터 요약 표시
+# ============================================================
+def _추출데이터_요약표시(extraction):
+    """추출된 데이터를 한눈에 보기 출력"""
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"  [생활습관] {', '.join(항목들)}")
+
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"  [진단] {목록}")
+
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"  [검사결과] {목록}")
+
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"  [영상검사] {목록}")
+
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"  [처방] {목록}")
+
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"  [추적계획] {목록}")
+
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"  [검사처방] {목록}")
+
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"  [처방요약] {ps}")
+
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if 변경 and 변경.get("변경유형") and 변경.get("새값"):
+            print(f"  [환자정보-{항목}] ({변경['변경유형']}) {변경.get('새값', '')}")
+
+
+# ============================================================
+# Step 6 내부: 항목별 y/n 승인
+# ============================================================
+def _추출데이터_항목별_승인(extraction):
+    """항목별 카테고리 단위로 y/n 질문. Returns: approved_data dict"""
+    approved = {}
+
+    # 활력징후
+    vitals = extraction.get("vitals", {})
+    if any(vitals.get(k) for k in ["수축기", "이완기", "심박수", "키", "몸무게"]):
+        bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr = f"-{vitals['심박수']}" if vitals.get("심박수") else ""
+        ht = f", 키 {vitals['키']}cm" if vitals.get("키") else ""
+        wt = f", 체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f", BMI {vitals['BMI']}" if vitals.get("BMI") else ""
+        print(f"\n  [활력징후] {bp}{hr}{ht}{wt}{bmi}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["vitals"] = vitals
+
+    # 생활습관
+    lifestyle = extraction.get("lifestyle", {})
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        print(f"\n  [생활습관] {', '.join(항목들)}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lifestyle"] = lifestyle
+
+    # 진단
+    diagnoses = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    if diagnoses:
+        목록 = " / ".join(f"{d['진단명']}({d.get('상태', '')})" for d in diagnoses)
+        print(f"\n  [진단] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["diagnoses"] = diagnoses
+
+    # 검사결과
+    labs = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    if labs:
+        목록 = " / ".join(f"{l['검사항목']} {l.get('결과값', '')}{l.get('단위', '')}" for l in labs)
+        print(f"\n  [검사결과] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["lab_results"] = labs
+
+    # 영상검사
+    imaging = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    if imaging:
+        목록 = " / ".join(f"{i['검사종류']}" for i in imaging)
+        print(f"\n  [영상검사] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["imaging"] = imaging
+
+    # 처방
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    if prescriptions:
+        목록 = " / ".join(
+            f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            for p in prescriptions
+        )
+        print(f"\n  [처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescriptions"] = prescriptions
+
+    # 추적계획
+    tracking = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    if tracking:
+        목록 = " / ".join(f"{t.get('내용', '')} 예정 {t.get('예정일', '')}" for t in tracking)
+        print(f"\n  [추적계획] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["tracking"] = tracking
+
+    # 검사처방
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    if test_orders:
+        목록 = " / ".join(f"{o.get('검사명', '')} 예정 {o.get('처방일', '')}" for o in test_orders)
+        print(f"\n  [검사처방] {목록}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["test_orders"] = test_orders
+
+    # 처방요약
+    ps = extraction.get("prescription_summary", "")
+    if ps:
+        print(f"\n  [처방요약] {ps}")
+        if input("  → 저장할까요? (y/n): ").strip().lower() == "y":
+            approved["prescription_summary"] = ps
+
+    # 환자정보
+    pi = extraction.get("patient_info", {})
+    for 항목 in ["가족력", "약부작용이력"]:
+        변경 = pi.get(항목, {})
+        if not 변경 or not 변경.get("변경유형"):
+            continue
+        유형표시 = {"add": "추가", "modify": "수정", "remove": "삭제"}.get(변경.get("변경유형", ""), "변경")
+        print(f"\n  [환자정보-{항목}] ({유형표시}) {변경.get('기존값', '')} → {변경.get('새값', '')}")
+        if 변경.get("근거"):
+            print(f"     근거: {변경['근거']}")
+        if input("  → 업데이트할까요? (y/n): ").strip().lower() == "y":
+            if "patient_info" not in approved:
+                approved["patient_info"] = {}
+            approved["patient_info"][항목] = 변경
+
+    return approved
+
+
+# ============================================================
+# Step 6: 2번째 API — 재추출 (선택적)
+# ============================================================
+def 재추출(환자id, final_free_text, 방문일):
+    """최종 확정 free-text로 데이터만 재추출 (2번째 API).
+    Returns: extraction dict or None"""
+    기록 = 환자전체기록조회(환자id)
+    if not 기록:
+        return None
+
+    익명기록, 매핑 = api_익명화(기록)
+    랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+    실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+    익명_text = final_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else final_free_text
+
+    프롬프트 = f"""[기존 환자 데이터]
+{json.dumps(익명기록, ensure_ascii=False, indent=2)}
+
+[이 차트의 방문일: {방문일}]
+[최종 확정 차트]
+{익명_text}
+
+위 최종 차트에서 데이터를 추출하세요."""
+
+    응답텍스트 = _익명화_api호출(REEXTRACT_SYSTEM, 프롬프트, 매핑)
+    매핑 = None
+    결과 = _parse_json_response(응답텍스트)
+    if 결과:
+        return 결과.get("extraction", 결과)
+    return None
+
+
+# ============================================================
+# Step 7: 테이블 저장
+# ============================================================
+def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
+    """승인된 항목을 유형별로 테이블에 저장. Returns: 저장건수"""
+    저장건수 = 0
+
+    # --- 방문 테이블 일괄 업데이트 (free_text, 활력징후, 생활습관, 처방요약) ---
+    # 방문기록수정()을 여러 번 호출하면 매번 새 레코드가 생성되므로
+    # 한 번의 UPDATE로 처리하여 불필요한 레코드 복사 방지
+    방문_업데이트 = {}
+    vitals = approved_data.get("vitals", {})
+    lifestyle = approved_data.get("lifestyle", {})
+    ps = approved_data.get("prescription_summary", "")
+
+    if final_free_text:
+        방문_업데이트["free_text"] = final_free_text
+    for 필드 in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"]:
+        if vitals.get(필드) is not None:
+            방문_업데이트[필드] = vitals[필드]
+    for 필드 in ["흡연", "음주", "운동"]:
+        if lifestyle.get(필드):
+            방문_업데이트[필드] = lifestyle[필드]
+    if ps:
+        방문_업데이트["처방요약"] = ps
+
+    if 방문_업데이트:
+        방문기록_일괄수정(방문id, 방문_업데이트)
+        저장건수 += 1
+        if final_free_text:
+            print(f"  → free_text 저장 완료")
+        if vitals:
+            bp = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+            print(f"  → 활력징후 저장: {bp}")
+        if lifestyle:
+            print(f"  → 생활습관 저장 완료")
+        if ps:
+            print(f"  → 처방요약 저장: {ps[:40]}{'...' if len(ps) > 40 else ''}")
+
+    # --- 진단 ---
+    for d in approved_data.get("diagnoses", []):
+        진단추가(환자id, 방문id, d["진단명"], d.get("상태", "활성"), d.get("비고", ""), d.get("표준코드", None))
+        저장건수 += 1
+        print(f"  → 진단 저장: {d['진단명']} ({d.get('상태', '')})")
+
+    # --- 검사결과 ---
+    for k in approved_data.get("lab_results", []):
+        검사결과추가(환자id, k.get("검사시행일", ""), k["검사항목"], k.get("결과값", ""),
+                   k.get("단위", ""), k.get("참고범위", ""), 방문id=방문id)
+        _검사처방_시행완료_매칭(환자id, k.get("검사시행일", ""), k["검사항목"])
+        저장건수 += 1
+        print(f"  → 검사결과 저장: {k['검사항목']} {k.get('결과값', '')}")
+
+    # --- 영상검사 ---
+    for e in approved_data.get("imaging", []):
+        영상검사추가(환자id, e.get("검사시행일", ""), e["검사종류"], e.get("결과요약", ""),
+                   e.get("주요수치", ""), 방문id=방문id)
+        저장건수 += 1
+        print(f"  → 영상검사 저장: {e['검사종류']}")
+
+    # --- 처방 ---
+    for p in approved_data.get("prescriptions", []):
+        처방추가(환자id, 방문id, p.get("약품명", ""), p.get("성분명", ""), p.get("용량", ""), p.get("용법", ""), p.get("일수", 0))
+        저장건수 += 1
+        print(f"  → 처방 저장: {p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')}")
+
+    # --- 추적계획 ---
+    for t in approved_data.get("tracking", []):
+        추적계획추가(환자id, 방문id, t.get("예정일", ""), t.get("내용", ""))
+        저장건수 += 1
+        print(f"  → 추적계획 저장: {t.get('내용', '')}")
+
+    # --- 검사처방 ---
+    # 처방일 fallback: AI가 처방일을 비워둔 경우 방문일로 대체
+    _방문일_fallback = ""
+    if approved_data.get("test_orders"):
+        _conn = sqlite3.connect(DB경로)
+        try:
+            row = _conn.execute(
+                "SELECT 방문일 FROM 방문 WHERE 방문id=? AND 유효여부=1", (방문id,)
+            ).fetchone()
+            if row:
+                _방문일_fallback = row[0]
+        finally:
+            _conn.close()
+
+    for o in approved_data.get("test_orders", []):
+        처방일 = o.get("처방일", "") or _방문일_fallback
+        검사처방추가(환자id, 방문id, o.get("검사명", ""), 처방일)
+        저장건수 += 1
+        print(f"  → 검사처방 저장: {o.get('검사명', '')} (예정: {처방일})")
+
+    # --- 환자정보 업데이트 ---
+    기존환자 = 환자전체기록조회(환자id)
+    for 항목명, 변경 in approved_data.get("patient_info", {}).items():
+        변경유형 = 변경.get("변경유형", "")
+        새값 = 변경.get("새값", "")
+        기존값 = 기존환자["환자"].get(항목명, "") if 기존환자 else ""
+
+        if 변경유형 == "add":
+            최종값 = (기존값 + ", " + 새값).strip(", ") if 기존값 else 새값
+        elif 변경유형 == "modify":
+            최종값 = 새값
+        elif 변경유형 == "remove":
+            최종값 = ""
+        else:
+            continue
+
+        환자정보수정(환자id, 항목명, 최종값)
+        저장건수 += 1
+        print(f"  → {항목명} 업데이트: {최종값}")
+
+    return 저장건수
+
+
+# ============================================================
+# 전체 흐름 orchestrator (main_system.py에서 호출)
+# ============================================================
+def 차트분석_저장_전체흐름(환자id, 방문id, free_text, 방문일=None):
+    """Steps 2~7 전체 실행.
+    방문id는 호출 전에 미리 생성되어 있어야 함.
+    Returns: (final_free_text, 저장건수) or (None, 0) on failure"""
+    if not 방문일:
+        방문일 = datetime.today().strftime("%y%m%d")
+
+    # Step 2: AI 분석
+    print("\n [AI 분석 중...]")
+    분석결과 = 차트분석(환자id, free_text, 방문일)
+    if not 분석결과:
+        print(" [오류] AI 분석 실패")
+        return None, 0
+
+    # Step 3: 제안 확인 (extraction 메모리 보관)
+    extraction, approved_texts = 제안확인(분석결과)
+
+    # Step 4 & 5: 제안이 있고 승인된 것이 있으면 붙이고 의사 수정
+    final_free_text = free_text
+    if approved_texts:
+        final_free_text = 제안_free_text_추가(free_text, approved_texts)
+        final_free_text = 의사_최종수정(final_free_text)
+    # 제안 없으면 Steps 4, 5 건너뜀
+
+    # Step 6: 추출 데이터 표시 → 재분석 여부 선택
+    print("\n=== 테이블 저장 데이터 (최초 분석 기준) ===")
+    _추출데이터_요약표시(extraction)
+
+    재분석 = input("\n차트 수정으로 데이터가 바뀌었나요? AI로 재분석할까요? (y/n): ").strip().lower()
+    if 재분석 == "y":
+        print(" [재분석 중...]")
+        재추출결과 = 재추출(환자id, final_free_text, 방문일)
+        if 재추출결과:
+            extraction = 재추출결과
+            print(" [재분석 완료]")
+        else:
+            print(" [경고] 재분석 실패. 최초 추출 데이터 사용.")
+
+    # 항목별 승인
+    print("\n=== 항목별 저장 승인 ===")
+    approved_data = _추출데이터_항목별_승인(extraction)
+
+    # Step 7: 저장
+    print("\n [저장 중...]")
+    저장건수 = 분석결과_저장(환자id, 방문id, final_free_text, approved_data)
+    print(f"\n 총 {저장건수}건 저장 완료.")
+
+    return final_free_text, 저장건수
+
+
+# ============================================================
+# 헬퍼: 검사처방 시행완료 자동 매칭
+# ============================================================
+def _검사처방_시행완료_매칭(환자id, 검사시행일, 검사항목):
+    """검사결과 저장 시 매칭되는 미시행 검사처방을 시행여부=1로 업데이트."""
+    conn = sqlite3.connect(DB경로)
+    try:
+        미시행 = conn.execute(
+            "SELECT 처방검사id, 검사명 FROM 검사처방 "
+            "WHERE 환자id=? AND 시행여부=0 AND 유효여부=1",
+            (환자id,)
+        ).fetchall()
+        for row in 미시행:
+            처방검사id, 검사명 = row[0], row[1]
+            if 검사항목 in 검사명 or 검사명 in 검사항목:
+                conn.execute(
+                    "UPDATE 검사처방 SET 시행여부=1 WHERE 처방검사id=?",
+                    (처방검사id,)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 차트 수정 함수 (기존 차트분석_저장_전체흐름()과 별개)
+# ============================================================
+def _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일):
+    """free-text 수정 전후를 비교하여 변경사항만 추출한다. 저장하지 않음.
+    Returns: dict (변경, 추가, 삭제, 활력징후_변경, 처방요약_변경) 또는 None"""
+
+    시스템_프롬프트 = """당신은 의료 차트 데이터 비교 어시스턴트입니다.
+수정 전후의 free-text를 비교하여 변경된 의료 데이터만 추출하세요.
+새로운 제안이나 검토 의견은 절대 하지 마세요.
+변경/추가/삭제된 데이터만 JSON으로 출력하세요.
+
+JSON 형식:
+{
+  "변경": [
+    {"테이블": "검사결과", "기존": {"검사항목": "HbA1c", "결과값": "9.5"}, "수정후": {"검사항목": "HbA1c", "결과값": "8.5"}, "검사시행일": "260301"}
+  ],
+  "추가": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "TG", "결과값": "150", "단위": "mg/dL", "검사시행일": "260301"}}
+  ],
+  "삭제": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "LDL", "결과값": "160", "검사시행일": "260301"}}
+  ],
+  "활력징후_변경": {"수축기": 140, "이완기": 88} 또는 null,
+  "처방요약_변경": "변경된 처방요약" 또는 null
+}
+변경이 없는 항목은 빈 배열로.
+활력징후_변경, 처방요약_변경은 변경 없으면 null로.
+순수 JSON만 출력. 마크다운이나 설명 없이."""
+
+    프롬프트 = f"""[방문일: {방문일}]
+
+[수정 전 free-text]
+{기존_free_text}
+
+[수정 후 free-text]
+{새_free_text}
+
+위 두 텍스트를 비교하여 변경된 의료 데이터만 추출하세요."""
+
+    # 익명화 처리
+    기록 = 환자전체기록조회(환자id)
+    if 기록:
+        익명기록, 매핑 = api_익명화(기록)
+        랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+        실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+        익명_기존 = 기존_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 기존_free_text
+        익명_새 = 새_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 새_free_text
+        익명_프롬프트 = 프롬프트.replace(기존_free_text, 익명_기존).replace(새_free_text, 익명_새)
+    else:
+        매핑 = {}
+        익명_프롬프트 = 프롬프트
+
+    # API 호출
+    응답 = _익명화_api호출(시스템_프롬프트, 익명_프롬프트, 매핑)
+    매핑 = None  # 매핑 메모리 해제
+
+    if not 응답:
+        return None
+
+    변경사항 = _parse_json_response(응답)
+    return 변경사항  # 파싱 실패 시 None, 성공 시 dict
+
+
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None):
+    """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
+    AI 제안/검토 의견 없음. 데이터 변경분만 처리.
+    변경사항이 이미 있으면 그대로 사용, 없으면 새로 추출.
+    Returns: (변경사항_요약, 변경건수)"""
+
+    if 변경사항 is None:
+        변경사항 = _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일)
+    if not 변경사항:
+        return "변경사항 추출 실패", 0
+
+    변경건수 = 0
+    변경요약 = []
+    conn = sqlite3.connect(DB경로)
+
+    try:
+        # free-text 자체 업데이트
+        방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+        # 활력징후 변경
+        vs = 변경사항.get("활력징후_변경")
+        if vs:
+            필드 = {k: vs[k] for k in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"] if vs.get(k) is not None}
+            if 필드:
+                방문기록_일괄수정(방문id, 필드)
+                변경건수 += 1
+                변경요약.append(f"활력징후 수정: {필드}")
+
+        # 처방요약 변경
+        if 변경사항.get("처방요약_변경"):
+            방문기록_일괄수정(방문id, {"처방요약": 변경사항["처방요약_변경"]})
+            변경건수 += 1
+            변경요약.append("처방요약 수정")
+
+        # 변경된 항목 처리 (기존 무효화 + 새 레코드)
+        for 항목 in 변경사항.get("변경", []):
+            테이블 = 항목.get("테이블", "")
+            기존 = 항목.get("기존", {})
+            수정후 = 항목.get("수정후", {})
+            시행일 = 항목.get("검사시행일", 방문일)
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 기존.get("검사항목"), 기존.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text 수정' WHERE 검사id=?", (r[0],))
+                conn.commit()
+                검사결과추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사항목", 기존.get("검사항목")),
+                           수정후.get("결과값", ""), 수정후.get("단위", ""), 수정후.get("참고범위", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"검사결과 수정: {기존.get('검사항목')} {기존.get('결과값')} → {수정후.get('결과값')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text 수정' WHERE 진단id=?", (r[0],))
+                conn.commit()
+                진단추가(환자id, 방문id, 수정후.get("진단명", 기존.get("진단명")),
+                        수정후.get("상태", "활성"), 수정후.get("비고", ""), 수정후.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 수정: {기존.get('진단명')} → {수정후.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text 수정' WHERE 처방id=?", (r[0],))
+                conn.commit()
+                처방추가(환자id, 방문id, 수정후.get("약품명", 기존.get("약품명")),
+                        수정후.get("성분명", ""), 수정후.get("용량", ""),
+                        수정후.get("용법", ""), 수정후.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 수정: {기존.get('약품명')} → {수정후.get('약품명')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 기존.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text 수정' WHERE 영상id=?", (r[0],))
+                conn.commit()
+                영상검사추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사종류", 기존.get("검사종류")),
+                           수정후.get("결과요약", ""), 수정후.get("주요수치", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 수정: {기존.get('검사종류')}")
+
+        # 추가된 항목 처리
+        for 항목 in 변경사항.get("추가", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                검사결과추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사항목"), 데이터.get("결과값", ""),
+                           데이터.get("단위", ""), 데이터.get("참고범위", ""),
+                           방문id=방문id)
+                _검사처방_시행완료_매칭(환자id, 데이터.get("검사시행일", 방문일), 데이터.get("검사항목", ""))
+                변경건수 += 1
+                변경요약.append(f"검사결과 추가: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                영상검사추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사종류"), 데이터.get("결과요약", ""),
+                           데이터.get("주요수치", ""), 방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 추가: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                진단추가(환자id, 방문id, 데이터.get("진단명"), 데이터.get("상태", "활성"),
+                        데이터.get("비고", ""), 데이터.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 추가: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                처방추가(환자id, 방문id, 데이터.get("약품명"), 데이터.get("성분명", ""),
+                        데이터.get("용량", ""), 데이터.get("용법", ""), 데이터.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 추가: {데이터.get('약품명')}")
+
+            elif 테이블 == "추적계획":
+                추적계획추가(환자id, 방문id, 데이터.get("예정일", ""), 데이터.get("내용", ""))
+                변경건수 += 1
+                변경요약.append(f"추적계획 추가: {데이터.get('내용')}")
+
+            elif 테이블 == "검사처방":
+                검사처방추가(환자id, 방문id, 데이터.get("검사명", ""), 데이터.get("처방일", ""))
+                변경건수 += 1
+                변경요약.append(f"검사처방 추가: {데이터.get('검사명')}")
+
+        # 삭제된 항목 처리 (무효화)
+        for 항목 in 변경사항.get("삭제", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사항목"), 데이터.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 검사id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"검사결과 삭제: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 영상id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"영상검사 삭제: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 진단id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"진단 삭제: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 처방id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"처방 삭제: {데이터.get('약품명')}")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return f"업데이트 오류: {e}", 0
+    finally:
+        conn.close()
+
+    요약텍스트 = "\n".join(변경요약) if 변경요약 else "변경사항 없음"
+    return 요약텍스트, 변경건수
+
+
+def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
+    """free-text 수정 후 AI 재분석. 기존 데이터 무효화 후 재추출/저장.
+    Streamlit 호환 (input() 사용 안 함).
+    Returns: (extraction_data, 저장건수) or (None, 0)"""
+
+    # 1. 이 방문에 연결된 기존 데이터 전부 무효화
+    conn = sqlite3.connect(DB경로)
+    try:
+        for 테이블 in ["진단", "추적계획", "처방", "검사처방"]:
+            conn.execute(
+                f"UPDATE {테이블} SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+                (방문id,)
+            )
+        conn.execute(
+            "UPDATE 검사결과 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.execute(
+            "UPDATE 영상검사 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 2. free-text 업데이트
+    방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+    # 3. AI 재분석 (차트분석 함수 직접 호출, input() 없음)
+    분석결과 = 차트분석(환자id, 새_free_text, 방문일)
+    if not 분석결과:
+        return None, 0
+
+    extraction = 분석결과.get("extraction", {})
+    if not extraction:
+        return None, 0
+
+    # 4. 전체 항목 자동 승인하여 저장
+    approved_data = {}
+    approved_data["vitals"] = extraction.get("vitals", {})
+    approved_data["lifestyle"] = extraction.get("lifestyle", {})
+    approved_data["diagnoses"] = [d for d in extraction.get("diagnoses", []) if d.get("구분") != "기존참조"]
+    approved_data["lab_results"] = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    approved_data["imaging"] = [i for i in extraction.get("imaging", []) if i.get("구분") != "기존참조"]
+    approved_data["prescriptions"] = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    approved_data["tracking"] = [t for t in extraction.get("tracking", []) if t.get("구분") != "기존참조"]
+    approved_data["test_orders"] = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    approved_data["prescription_summary"] = extraction.get("prescription_summary", "")
+    approved_data["patient_info"] = {k: v for k, v in extraction.get("patient_info", {}).items() if v and v.get("변경유형")}
+
+    저장건수 = 분석결과_저장(환자id, 방문id, 새_free_text, approved_data)
+    방문기록_일괄수정(방문id, {"분석완료": 1})
+
+    return extraction, 저장건수

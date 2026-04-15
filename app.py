@@ -1231,7 +1231,7 @@ def _chart_step4(환자id):
             st.session_state[f"chart_step_{환자id}"] = 3
             st.rerun()
     with col2:
-        if st.button("🔄 AI 재분석", key=f"s4_reanalyze_{환자id}"):
+        if st.button("🔄 저장 데이터 재추출", key=f"s4_reanalyze_{환자id}"):
             with st.spinner("AI가 재분석 중..."):
                 재결과 = 재추출(환자id, 보완본, 방문일)
             if 재결과:
@@ -1297,15 +1297,13 @@ def _chart_step5(환자id):
             st.markdown(f"  {항목명}: **{n}건**")
 
     st.markdown("---")
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("📝 새 진료기록 작성", key=f"s5_new_{환자id}"):
-            _chart_state_초기화(환자id)
-            st.rerun()
-    with col2:
-        if st.button("📋 브리핑 보기", key=f"s5_briefing_{환자id}"):
-            _chart_state_초기화(환자id)
-            st.rerun()
+    if st.button("📝 새 진료기록 작성", key=f"s5_new_{환자id}"):
+        for k in [f"chart_step_{환자id}", f"chart_분석결과_{환자id}",
+                  f"chart_승인texts_{환자id}", f"chart_보완본_{환자id}",
+                  f"chart_free_text_{환자id}", f"chart_방문일_{환자id}",
+                  f"chart_방문id_{환자id}", f"chart_저장건수_{환자id}"]:
+            st.session_state.pop(k, None)
+        st.rerun()
 
 
 def _tab_edit(환자id: int):
