@@ -998,12 +998,14 @@ JSON 형식:
     return 변경사항  # 파싱 실패 시 None, 성공 시 dict
 
 
-def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일):
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None):
     """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
     AI 제안/검토 의견 없음. 데이터 변경분만 처리.
+    변경사항이 이미 있으면 그대로 사용, 없으면 새로 추출.
     Returns: (변경사항_요약, 변경건수)"""
 
-    변경사항 = _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일)
+    if 변경사항 is None:
+        변경사항 = _변경사항_추출(환자id, 방문id, 기존_free_text, 새_free_text, 방문일)
     if not 변경사항:
         return "변경사항 추출 실패", 0
 

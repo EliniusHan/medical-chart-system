@@ -9,6 +9,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from util import (
     DB연결,
@@ -21,11 +22,16 @@ from util import (
     환자정보수정,
     방문기록삭제,
     환자삭제,
+    방문기록추가,
+    방문기록_일괄수정,
 )
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
-from briefing_generator import 브리핑생성
-from chart_analyzer import 차트_데이터만_수정, 차트_재분석_저장, _변경사항_추출
+from briefing_generator import 브리핑생성, 브리핑생성_최근차트
+from chart_analyzer import (
+    차트_데이터만_수정, 차트_재분석_저장, _변경사항_추출,
+    차트분석, 제안_free_text_추가, 재추출, 분석결과_저장,
+)
 
 DB_경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 
@@ -47,17 +53,17 @@ st.set_page_config(
 def _inject_css():
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Gowun+Batang&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
 
-    /* 전체 글자체 — Times New Roman(영문) + Nanum Myeongjo/바탕계열(한글) */
+    /* 전체 글자체 — Inter(영문) + Noto Sans KR(한글) */
     html, body, [class*="css"], .stApp,
     .stMarkdown, .stMarkdown p, .stMarkdown span,
     .stTextInput input, .stTextArea textarea,
     button, label, .stTabs [data-baseweb="tab"],
     .stDataFrame, .stMetric, .stCaption,
     [data-testid="stSidebar"] * {
-        font-family: 'Times New Roman', 'Nanum Myeongjo', 'Gowun Batang',
-                     'Batang', 'BatangChe', Georgia, serif !important;
+        font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont,
+                     'Segoe UI', sans-serif !important;
     }
 
     /* ── 라이트 테마 기본 ── */
@@ -812,33 +818,26 @@ def _render_patient_detail(환자id: int):
     주진단표시 = ", ".join(활성진단[:3]) + ("…" if len(활성진단) > 3 else "") if 활성진단 else "진단 없음"
     나이표시 = str(나이) if 나이 is not None else "?"
 
-    가족력_현재  = 환자.get("가족력", "")      or ""
-    약부작용_현재 = 환자.get("약부작용이력", "") or ""
+    # ── 환자 헤더 (1블록: 신상 + 가족력/약부작용 + 뒤로)
+    hdr_left, hdr_mid, hdr_right = st.columns([4, 5, 1])
 
-    # ── 환자 헤더 (컴팩트 2줄: 이름/번호/나이/성별/생년월일 + 주진단) + 뒤로가기
-    hdr_left, hdr_right = st.columns([8, 1])
     with hdr_left:
         st.markdown(f"""
-        <div class="patient-header" style="padding:12px 16px;margin-bottom:8px;">
-            <div style="flex:1;">
-                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-                    <span style="font-size:18px;font-weight:700;color:#1a1a1a;">{이름}</span>
-                    <span style="font-size:14px;color:#9a9590;">{병록번호_숫자만}</span>
-                    <span style="font-size:14px;color:#9a9590;">{나이표시}/{성별}</span>
-                    <span style="font-size:14px;color:#9a9590;">{환자.get('생년월일', '')}</span>
-                </div>
-                <div style="font-size:13px;color:#a08530;margin-top:4px;">{주진단표시}</div>
+        <div style="background:#faf9f6;border:1px solid #e8e4dc;border-left:3px solid #c9a84c;border-radius:10px;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                <span style="font-size:18px;font-weight:700;color:#1a1a1a;">{이름}</span>
+                <span style="font-size:14px;color:#6b6560;">{병록번호_숫자만}</span>
+                <span style="font-size:14px;color:#6b6560;">{나이표시}/{성별}</span>
+                <span style="font-size:14px;color:#6b6560;">{환자.get('생년월일', '')}</span>
             </div>
+            <div style="font-size:13px;color:#a08530;margin-top:4px;">{주진단표시}</div>
         </div>
         """, unsafe_allow_html=True)
-    with hdr_right:
-        if st.session_state.page_history:
-            if st.button("← 뒤로", key="btn_back_detail", type="secondary"):
-                _go_back()
 
-    # ── 가족력/약부작용
-    fc1, fc2 = st.columns(2)
-    with fc1:
+    with hdr_mid:
+        가족력_현재  = 환자.get("가족력", "")      or ""
+        약부작용_현재 = 환자.get("약부작용이력", "") or ""
+
         fi_col, fb_col = st.columns([5, 1], vertical_alignment="bottom")
         with fi_col:
             가족력_입력 = st.text_input("가족력", value=가족력_현재, key=f"fh_{환자id}")
@@ -847,7 +846,7 @@ def _render_patient_detail(환자id: int):
                 환자정보수정(환자id, "가족력", 가족력_입력)
                 st.toast("가족력 저장 완료")
                 st.rerun()
-    with fc2:
+
         ai_col, ab_col = st.columns([5, 1], vertical_alignment="bottom")
         with ai_col:
             약부작용_입력 = st.text_input("약부작용이력", value=약부작용_현재, key=f"ae_{환자id}")
@@ -856,6 +855,11 @@ def _render_patient_detail(환자id: int):
                 환자정보수정(환자id, "약부작용이력", 약부작용_입력)
                 st.toast("약부작용이력 저장 완료")
                 st.rerun()
+
+    with hdr_right:
+        if st.session_state.page_history:
+            if st.button("← 뒤로", key="btn_back_detail", type="secondary"):
+                _go_back()
 
     col_left, col_right = st.columns([6, 4], gap="medium")
 
@@ -885,10 +889,22 @@ def _tab_briefing(환자id: int):
                 st.session_state[cache_key] = None
                 st.rerun()
     else:
-        st.info("AI 브리핑을 생성하면 환자의 전체 기록을 요약합니다. API 비용이 발생합니다.")
+        브리핑모드 = st.radio(
+            "브리핑 방식",
+            ["전체 기록 분석 — 모든 방문/검사 데이터를 종합 분석",
+             "최근 차트 분석 — 가장 최근 진료 기록만 분석"],
+            key=f"briefing_mode_{환자id}",
+            help="차트에 이전 기록을 요약해서 적는 스타일이면 '최근 차트'가 효율적입니다.",
+        )
+
+        st.info("AI 브리핑을 생성합니다. API 비용이 발생합니다.")
+
         if st.button("📋 AI 브리핑 생성", type="primary", key=f"briefing_gen_{환자id}"):
             with st.spinner("AI가 브리핑을 생성 중입니다..."):
-                결과 = 브리핑생성(환자id)
+                if "전체" in 브리핑모드:
+                    결과 = 브리핑생성(환자id)
+                else:
+                    결과 = 브리핑생성_최근차트(환자id)
             if 결과:
                 st.session_state[cache_key] = 결과
                 st.rerun()
@@ -898,25 +914,398 @@ def _tab_briefing(환자id: int):
 
 def _tab_chart_entry(환자id: int):
     mode = st.session_state.mode
-    if mode == "진료보조용":
-        st.caption("진료보조용 모드 — Step 1~3 (제안 확인까지, 저장 없음)")
-    else:
-        st.caption("연구용 모드 — Step 1~5 전체 (데이터 추출 및 저장 포함)")
+    총단계 = 3 if mode == "진료보조용" else 5
 
-    steps = ["① 차트 입력", "② AI 제안 확인", "③ 보완 차트", "④ 추출 데이터", "⑤ 저장 완료"]
-    if mode == "진료보조용":
-        steps = steps[:3]
+    현재단계 = st.session_state.get(f"chart_step_{환자id}", 1)
 
-    cols = st.columns(len(steps))
-    for i, (col, label) in enumerate(zip(cols, steps)):
+    단계명 = ["① 차트 입력", "② AI 제안", "③ 보완 확인", "④ 추출 데이터", "⑤ 저장"]
+    표시단계 = 단계명[:총단계]
+
+    cols = st.columns(len(표시단계))
+    for i, (col, label) in enumerate(zip(cols, 표시단계)):
         with col:
-            if i == 0:
+            단계번호 = i + 1
+            if 단계번호 < 현재단계:
+                st.markdown(f"<span style='color:#5a8a5a;'>✅ {label}</span>", unsafe_allow_html=True)
+            elif 단계번호 == 현재단계:
                 st.markdown(f"**{label}**")
             else:
-                st.markdown(f"<span style='color:#9ca3af'>{label}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color:#9a9590;'>{label}</span>", unsafe_allow_html=True)
 
     st.markdown("---")
-    st.info("🔧 추후 구현 — 진료기록 5단계 흐름\n\n`chart_analyzer.차트분석_저장_전체흐름()` 연동 예정")
+
+    if 현재단계 == 1:
+        _chart_step1(환자id)
+    elif 현재단계 == 2:
+        _chart_step2(환자id)
+    elif 현재단계 == 3:
+        _chart_step3(환자id, mode)
+    elif 현재단계 == 4 and 총단계 >= 4:
+        _chart_step4(환자id)
+    elif 현재단계 == 5 and 총단계 >= 5:
+        _chart_step5(환자id)
+
+
+# ── 진료기록 단계별 상태 초기화 헬퍼 ──
+def _chart_state_초기화(환자id):
+    for k in [f"chart_step_{환자id}", f"chart_분석결과_{환자id}",
+              f"chart_승인texts_{환자id}", f"chart_보완본_{환자id}",
+              f"chart_free_text_{환자id}", f"chart_방문일_{환자id}",
+              f"chart_방문id_{환자id}", f"chart_저장건수_{환자id}"]:
+        st.session_state.pop(k, None)
+
+
+def _chart_step1(환자id):
+    """Step 1: 방문일 + free-text 입력 → AI 분석 요청"""
+    오늘 = datetime.today().strftime("%y%m%d")
+    방문일 = st.text_input(
+        "방문일 (YYMMDD, 빈칸=오늘)", value="",
+        key=f"s1_date_{환자id}",
+        placeholder=f"빈칸이면 오늘({오늘})",
+    )
+    free_text = st.text_area(
+        "진료 기록 (free-text)", height=200,
+        key=f"s1_ft_{환자id}",
+        placeholder="예) HTN f/u. BP 140/90. amlodipine 5mg qd 복용 중.\nLDL 이전 130으로 높아 rosuvastatin 추가 고려.\n다음 3개월 후 Lab f/u 예정.",
+    )
+
+    if st.button("AI 분석 요청 →", type="primary", key=f"s1_submit_{환자id}"):
+        if not free_text.strip():
+            st.error("진료 기록을 입력하세요.")
+            return
+
+        실제방문일 = 방문일.strip() or 오늘
+        st.session_state[f"chart_방문일_{환자id}"] = 실제방문일
+        st.session_state[f"chart_free_text_{환자id}"] = free_text.strip()
+
+        # 방문 기록 먼저 생성 (분석완료=0, 나중에 저장 후 1로 갱신)
+        방문id = 방문기록추가(환자id, 실제방문일,
+                            수축기=None, 이완기=None, 심박수=None,
+                            키=None, 몸무게=None, BMI=None,
+                            free_text=free_text.strip(), 분석완료=0)
+        if not 방문id:
+            st.error("방문 기록 생성에 실패했습니다.")
+            return
+        st.session_state[f"chart_방문id_{환자id}"] = 방문id
+
+        with st.spinner("AI가 차트를 분석 중입니다..."):
+            결과 = 차트분석(환자id, free_text.strip(), 실제방문일)
+
+        if 결과:
+            st.session_state[f"chart_분석결과_{환자id}"] = 결과
+            st.session_state[f"chart_step_{환자id}"] = 2
+            st.rerun()
+        else:
+            st.error("AI 분석에 실패했습니다. API 키와 네트워크를 확인하세요.")
+
+
+def _chart_step2(환자id):
+    """Step 2: AI 제안 확인 — 승인한 항목을 free-text에 추가할 텍스트로 구성"""
+    분석결과 = st.session_state.get(f"chart_분석결과_{환자id}", {})
+    if not 분석결과:
+        st.error("분석 결과가 없습니다.")
+        st.session_state[f"chart_step_{환자id}"] = 1
+        st.rerun()
+        return
+
+    suggestions  = 분석결과.get("suggestions", [])
+    legal        = 분석결과.get("legal", [])
+    ic           = 분석결과.get("informed_consent", {})
+    has_any      = bool(suggestions or legal or ic.get("chart_text"))
+
+    if not has_any:
+        st.info("AI 검토 의견이 없습니다. 다음 단계로 진행합니다.")
+        st.session_state[f"chart_승인texts_{환자id}"] = []
+        st.session_state[f"chart_step_{환자id}"] = 3
+        st.rerun()
+        return
+
+    st.markdown("AI가 제안하는 보완/확인 사항입니다. 차트에 반영할 항목을 선택하세요.")
+
+    approved_flags = {}
+
+    if suggestions:
+        st.markdown("**💡 AI 검토 의견**")
+        for i, s in enumerate(suggestions):
+            내용 = s.get("content", "")
+            사유 = s.get("reason", "")
+            chart_text = s.get("chart_text", "")
+            라벨 = f"{내용}" + (f"  ({사유})" if 사유 else "")
+            approved_flags[f"sug_{i}"] = st.checkbox(라벨, value=bool(chart_text), key=f"s2_sug_{환자id}_{i}")
+            if chart_text:
+                st.caption(f'  → 추가될 문구: "{chart_text}"')
+
+    if legal:
+        st.markdown("**⚖️ 법적 확인사항**")
+        for i, l in enumerate(legal):
+            내용 = l.get("content", "")
+            사유 = l.get("reason", "")
+            chart_text = l.get("chart_text", "")
+            라벨 = f"{내용}" + (f"  ({사유})" if 사유 else "")
+            approved_flags[f"legal_{i}"] = st.checkbox(라벨, value=bool(chart_text), key=f"s2_legal_{환자id}_{i}")
+            if chart_text:
+                st.caption(f'  → 추가될 문구: "{chart_text}"')
+
+    ic_text = ic.get("chart_text", "")
+    if ic_text:
+        st.markdown("**📢 설명의무 기록**")
+        drugs = ", ".join(ic.get("drugs", []))
+        se    = ", ".join(ic.get("side_effects", []))
+        if drugs:
+            st.caption(f"약물: {drugs}  |  부작용: {se}")
+        approved_flags["ic"] = st.checkbox(f'"{ic_text}"', value=True, key=f"s2_ic_{환자id}")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("← 이전 단계", key=f"s2_back_{환자id}"):
+            st.session_state[f"chart_step_{환자id}"] = 1
+            st.rerun()
+    with col2:
+        if st.button("승인 항목 확정 →", type="primary", key=f"s2_next_{환자id}"):
+            # 승인된 항목의 chart_text 수집
+            approved_texts = []
+            for i, s in enumerate(suggestions):
+                if approved_flags.get(f"sug_{i}") and s.get("chart_text"):
+                    approved_texts.append(s["chart_text"])
+            for i, l in enumerate(legal):
+                if approved_flags.get(f"legal_{i}") and l.get("chart_text"):
+                    approved_texts.append(l["chart_text"])
+            if approved_flags.get("ic") and ic_text:
+                approved_texts.append(ic_text)
+
+            st.session_state[f"chart_승인texts_{환자id}"] = approved_texts
+            st.session_state[f"chart_step_{환자id}"] = 3
+            st.rerun()
+
+
+def _chart_step3(환자id, mode):
+    """Step 3: 보완 차트 확인 — 원본 vs AI 보완본 비교, 편집 가능"""
+    원본       = st.session_state.get(f"chart_free_text_{환자id}", "")
+    approved_texts = st.session_state.get(f"chart_승인texts_{환자id}", [])
+    보완본     = 제안_free_text_추가(원본, approved_texts)
+
+    st.markdown("원본 / AI 보완본을 확인하고 최종본을 편집하세요.")
+
+    col_orig, col_enhanced = st.columns(2)
+    with col_orig:
+        st.markdown("**원본 free-text**")
+        st.text_area("원본", value=원본, height=220, disabled=True, key=f"s3_orig_{환자id}")
+    with col_enhanced:
+        st.markdown("**AI 보완본 (편집 가능)**")
+        최종본 = st.text_area("보완본", value=보완본, height=220, key=f"s3_enhanced_{환자id}")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("← 이전 단계", key=f"s3_back_{환자id}"):
+            st.session_state[f"chart_step_{환자id}"] = 2
+            st.rerun()
+    with col2:
+        다음라벨 = "최종 확정 (저장 없음) ✓" if mode == "진료보조용" else "최종 확정 →"
+        if st.button(다음라벨, type="primary", key=f"s3_next_{환자id}"):
+            st.session_state[f"chart_보완본_{환자id}"] = 최종본
+
+            # 방문 free_text 업데이트 (보완본으로)
+            방문id = st.session_state.get(f"chart_방문id_{환자id}")
+            if 방문id and 최종본 != 원본:
+                방문기록_일괄수정(방문id, {"free_text": 최종본})
+
+            if mode == "진료보조용":
+                st.success("차트 보완 완료! (진료보조용 모드 — 데이터 저장 없음)")
+                _chart_state_초기화(환자id)
+                st.rerun()
+            else:
+                st.session_state[f"chart_step_{환자id}"] = 4
+                st.rerun()
+
+
+def _chart_step4(환자id):
+    """Step 4: 추출 데이터 확인 — 체크박스로 저장 항목 선택"""
+    분석결과  = st.session_state.get(f"chart_분석결과_{환자id}", {})
+    extraction = 분석결과.get("extraction", {})
+    방문id    = st.session_state.get(f"chart_방문id_{환자id}")
+    보완본    = st.session_state.get(f"chart_보완본_{환자id}", "")
+    방문일    = st.session_state.get(f"chart_방문일_{환자id}", "")
+
+    st.markdown("AI가 추출한 데이터입니다. 저장할 항목을 확인하세요.")
+
+    # 각 항목 체크박스 렌더링 + 체크 결과 수집
+    vitals    = extraction.get("vitals", {})
+    lifestyle = extraction.get("lifestyle", {})
+    diagnoses   = [d for d in extraction.get("diagnoses", [])   if d.get("구분") != "기존참조"]
+    lab_results = [l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"]
+    imaging     = [i for i in extraction.get("imaging", [])     if i.get("구분") != "기존참조"]
+    prescriptions = [p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)]
+    tracking    = [t for t in extraction.get("tracking", [])    if t.get("구분") != "기존참조"]
+    test_orders = [o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"]
+    ps          = extraction.get("prescription_summary", "")
+    patient_info = extraction.get("patient_info", {})
+
+    chk = {}  # 체크 결과 저장
+
+    if any(vitals.get(k) for k in ["수축기", "이완기", "심박수", "키", "몸무게"]):
+        bp  = f"BP {vitals.get('수축기', '?')}/{vitals.get('이완기', '?')}"
+        hr  = f"  HR {vitals['심박수']}" if vitals.get("심박수") else ""
+        ht  = f"  키 {vitals['키']}cm"   if vitals.get("키") else ""
+        wt  = f"  체중 {vitals['몸무게']}kg" if vitals.get("몸무게") else ""
+        bmi = f"  BMI {vitals['BMI']}"   if vitals.get("BMI") else ""
+        chk["vitals"] = st.checkbox(f"💓 활력징후: {bp}{hr}{ht}{wt}{bmi}", value=True, key=f"s4_vitals_{환자id}")
+
+    if any(lifestyle.get(k) for k in ["흡연", "음주", "운동"]):
+        항목들 = [f"{k}: {lifestyle[k]}" for k in ["흡연", "음주", "운동"] if lifestyle.get(k)]
+        chk["lifestyle"] = st.checkbox(f"🚶 생활습관: {', '.join(항목들)}", value=True, key=f"s4_life_{환자id}")
+
+    if diagnoses:
+        st.markdown("**🩺 진단**")
+        chk["diagnoses"] = []
+        for i, d in enumerate(diagnoses):
+            표시 = f"{d.get('진단명', '')} ({d.get('상태', '')})"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_dx_{환자id}_{i}")
+            if checked:
+                chk["diagnoses"].append(d)
+
+    if lab_results:
+        st.markdown("**🧪 검사결과**")
+        chk["lab_results"] = []
+        for i, l in enumerate(lab_results):
+            표시 = f"{l.get('검사항목', '')} {l.get('결과값', '')}{l.get('단위', '')}"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_lab_{환자id}_{i}")
+            if checked:
+                chk["lab_results"].append(l)
+
+    if imaging:
+        st.markdown("**📷 영상검사**")
+        chk["imaging"] = []
+        for i, e in enumerate(imaging):
+            표시 = f"{e.get('검사종류', '')} ({e.get('검사시행일', '')})"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_img_{환자id}_{i}")
+            if checked:
+                chk["imaging"].append(e)
+
+    if prescriptions:
+        st.markdown("**💊 처방**")
+        chk["prescriptions"] = []
+        for i, p in enumerate(prescriptions):
+            표시 = f"{p.get('약품명', '')} {p.get('용량', '')} {p.get('용법', '')} {p.get('일수', 0)}일"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_rx_{환자id}_{i}")
+            if checked:
+                chk["prescriptions"].append(p)
+
+    if tracking:
+        st.markdown("**📅 추적계획**")
+        chk["tracking"] = []
+        for i, t in enumerate(tracking):
+            표시 = f"{t.get('내용', '')} ({t.get('예정일', '')})"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_trk_{환자id}_{i}")
+            if checked:
+                chk["tracking"].append(t)
+
+    if test_orders:
+        st.markdown("**🔬 검사처방**")
+        chk["test_orders"] = []
+        for i, o in enumerate(test_orders):
+            표시 = f"{o.get('검사명', '')} (예정: {o.get('처방일', '')})"
+            checked = st.checkbox(f"  {표시}", value=True, key=f"s4_ord_{환자id}_{i}")
+            if checked:
+                chk["test_orders"].append(o)
+
+    if ps:
+        chk["prescription_summary_flag"] = st.checkbox(f"📝 처방요약: {ps[:60]}{'...' if len(ps) > 60 else ''}", value=True, key=f"s4_ps_{환자id}")
+
+    for 항목명, 변경 in patient_info.items():
+        if 변경 and 변경.get("변경유형"):
+            유형표시 = {"add": "추가", "modify": "수정", "remove": "삭제"}.get(변경.get("변경유형", ""), "변경")
+            표시 = f"환자정보 {항목명} ({유형표시}): {변경.get('기존값', '')} → {변경.get('새값', '')}"
+            if "patient_info" not in chk:
+                chk["patient_info"] = {}
+            checked = st.checkbox(f"👤 {표시}", value=True, key=f"s4_pi_{환자id}_{항목명}")
+            if checked:
+                chk["patient_info"][항목명] = 변경
+
+    if not any([vitals, lifestyle, diagnoses, lab_results, imaging, prescriptions, tracking, test_orders, ps]):
+        st.info("추출된 데이터가 없습니다.")
+
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("← 이전 단계", key=f"s4_back_{환자id}"):
+            st.session_state[f"chart_step_{환자id}"] = 3
+            st.rerun()
+    with col2:
+        if st.button("🔄 AI 재분석", key=f"s4_reanalyze_{환자id}"):
+            with st.spinner("AI가 재분석 중..."):
+                재결과 = 재추출(환자id, 보완본, 방문일)
+            if 재결과:
+                분석결과["extraction"] = 재결과
+                st.session_state[f"chart_분석결과_{환자id}"] = 분석결과
+                st.rerun()
+            else:
+                st.error("재분석 실패. 기존 추출 데이터를 사용합니다.")
+    with col3:
+        if st.button("이대로 저장 →", type="primary", key=f"s4_save_{환자id}"):
+            # approved_data 구성
+            approved_data = {}
+            if chk.get("vitals"):
+                approved_data["vitals"] = vitals
+            if chk.get("lifestyle"):
+                approved_data["lifestyle"] = lifestyle
+            if chk.get("diagnoses"):
+                approved_data["diagnoses"] = chk["diagnoses"]
+            if chk.get("lab_results"):
+                approved_data["lab_results"] = chk["lab_results"]
+            if chk.get("imaging"):
+                approved_data["imaging"] = chk["imaging"]
+            if chk.get("prescriptions"):
+                approved_data["prescriptions"] = chk["prescriptions"]
+            if chk.get("tracking"):
+                approved_data["tracking"] = chk["tracking"]
+            if chk.get("test_orders"):
+                approved_data["test_orders"] = chk["test_orders"]
+            if chk.get("prescription_summary_flag") and ps:
+                approved_data["prescription_summary"] = ps
+            if chk.get("patient_info"):
+                approved_data["patient_info"] = chk["patient_info"]
+
+            with st.spinner("저장 중..."):
+                건수 = 분석결과_저장(환자id, 방문id, 보완본, approved_data)
+                # 분석완료 플래그 업데이트
+                방문기록_일괄수정(방문id, {"분석완료": 1})
+
+            st.session_state[f"chart_저장건수_{환자id}"] = 건수
+            st.session_state[f"chart_step_{환자id}"] = 5
+            st.rerun()
+
+
+def _chart_step5(환자id):
+    """Step 5: 저장 완료 + 결과 요약"""
+    건수      = st.session_state.get(f"chart_저장건수_{환자id}", 0)
+    분석결과  = st.session_state.get(f"chart_분석결과_{환자id}", {})
+    extraction = 분석결과.get("extraction", {})
+
+    st.success(f"저장 완료! 총 {건수}건")
+
+    요약 = [
+        ("방문 기록", 1),
+        ("진단",    len([d for d in extraction.get("diagnoses", [])   if d.get("구분") != "기존참조"])),
+        ("검사결과", len([l for l in extraction.get("lab_results", []) if l.get("구분") != "기존참조"])),
+        ("영상검사", len([i for i in extraction.get("imaging", [])     if i.get("구분") != "기존참조"])),
+        ("처방",     len([p for p in extraction.get("prescriptions", []) if p.get("구분") not in ("기존참조",)])),
+        ("검사처방", len([o for o in extraction.get("test_orders", []) if o.get("구분") != "기존참조"])),
+        ("추적계획", len([t for t in extraction.get("tracking", [])    if t.get("구분") != "기존참조"])),
+    ]
+    for 항목명, n in 요약:
+        if n > 0:
+            st.markdown(f"  {항목명}: **{n}건**")
+
+    st.markdown("---")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("📝 새 진료기록 작성", key=f"s5_new_{환자id}"):
+            _chart_state_초기화(환자id)
+            st.rerun()
+    with col2:
+        if st.button("📋 브리핑 보기", key=f"s5_briefing_{환자id}"):
+            _chart_state_초기화(환자id)
+            st.rerun()
 
 
 def _tab_edit(환자id: int):
@@ -1043,16 +1432,20 @@ def _tab_edit(환자id: int):
                     if st.button("✅ 확정 저장", type="primary", key=f"confirm_save_{편집중_방문id}"):
                         with st.spinner("저장 중..."):
                             if "예" in 재분석:
-                                결과 = 차트_재분석_저장(
-                                    환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
-                                if 결과:
-                                    st.success("재분석 완료!")
-                                else:
-                                    st.error("재분석 실패")
+                                try:
+                                    결과 = 차트_재분석_저장(
+                                        환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
+                                    if 결과:
+                                        st.success("재분석 + 저장 완료!")
+                                    else:
+                                        st.warning("재분석 완료 (변경사항 없음)")
+                                except Exception as e:
+                                    st.error(f"재분석 실패: {e}")
                             else:
                                 요약, 건수 = 차트_데이터만_수정(
                                     환자id, 편집중_방문id, 기존_free_text,
-                                    새_free_text, 편집_방문.get("방문일", ""))
+                                    새_free_text, 편집_방문.get("방문일", ""),
+                                    변경사항=변경사항)
                                 if 건수 > 0:
                                     st.success(f"저장 완료! {건수}건 변경")
                                 else:
@@ -1245,6 +1638,34 @@ def _history_by_category(기록: dict):
             )
 
 
+def _copy_button(text, key):
+    """클립보드 복사 버튼을 렌더링한다."""
+    escaped = (text
+               .replace("\\", "\\\\")
+               .replace("`", "\\`")
+               .replace("$", "\\$")
+               .replace("'", "\\'")
+               .replace("\n", "\\n")
+               .replace("\r", ""))
+    components.html(f"""
+    <button onclick="
+        navigator.clipboard.writeText('{escaped}').then(() => {{
+            this.innerText = '✅ 복사됨';
+            setTimeout(() => this.innerText = '📋 복사', 1500);
+        }})
+    " style="
+        background: #faf9f6;
+        border: 1px solid #e8e4dc;
+        border-radius: 6px;
+        padding: 4px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        color: #6b6560;
+        font-family: 'Inter', 'Noto Sans KR', sans-serif;
+    ">📋 복사</button>
+    """, height=36)
+
+
 def _history_by_date(기록: dict):
     """모든 기록을 날짜별로 묶어 최신 순으로 표시한다."""
     # 방문id → 방문일 매핑
@@ -1320,7 +1741,11 @@ def _history_by_date(기록: dict):
 
                     ft = v.get("free_text", "")
                     if ft and ft.strip():
-                        st.markdown("**진료 기록:**")
+                        ft_col, cp_col = st.columns([6, 1])
+                        with ft_col:
+                            st.markdown("**진료 기록:**")
+                        with cp_col:
+                            _copy_button(ft, f"ft_{날짜}_{i}")
                         st.markdown(ft)
                     else:
                         st.markdown("**진료 기록:** 없음")
@@ -1343,7 +1768,6 @@ def _history_by_date(기록: dict):
                 전체진단 = [d for d in 기록.get("진단", [])
                             if d.get("상태") in ("활성", "의심") and d.get("유효여부", 1) == 1]
                 if 전체진단:
-                    st.caption("  (이전 진단 유지)")
                     for d in 전체진단:
                         상태표시 = f"({d.get('상태', '')})" if d.get('상태') else ""
                         st.caption(f"  {d.get('진단명', '')} {상태표시}")
