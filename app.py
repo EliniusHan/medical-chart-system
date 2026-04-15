@@ -25,7 +25,7 @@ from util import (
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
 from briefing_generator import 브리핑생성
-from chart_analyzer import 차트_데이터만_수정, 차트_재분석_저장
+from chart_analyzer import 차트_데이터만_수정, 차트_재분석_저장, _변경사항_추출
 
 DB_경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 
@@ -965,40 +965,113 @@ def _tab_edit(환자id: int):
                 key=f"edit_ft_{편집중_방문id}",
             )
 
-            if 새_free_text != 기존_free_text:
+            변경됨 = 새_free_text != 기존_free_text
+
+            if 변경됨:
                 st.caption("⚠ 변경사항이 있습니다.")
 
-                재분석 = st.radio(
-                    "AI 재분석 여부",
-                    ["아니오 — 데이터 수정만 (과거 기록 정정용)",
-                     "예 — 전체 재분석 (당일 진료 중 수정용)"],
-                    key=f"reanalyze_{편집중_방문id}",
-                )
+            # AI 재분석 여부 (항상 표시)
+            재분석 = st.radio(
+                "AI 재분석 여부",
+                ["아니오 — 데이터 수정만 (과거 기록 정정용)",
+                 "예 — 전체 재분석 (당일 진료 중 수정용)"],
+                key=f"reanalyze_{편집중_방문id}",
+            )
 
-                if st.button("💾 저장", type="primary", key=f"save_edit_{편집중_방문id}"):
-                    with st.spinner("변경사항 처리 중..."):
-                        if "예" in 재분석:
-                            제안, 건수 = 차트_재분석_저장(
-                                환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
-                            st.success(f"재분석 완료! {건수}건 저장")
-                        else:
-                            요약, 건수 = 차트_데이터만_수정(
-                                환자id, 편집중_방문id, 기존_free_text, 새_free_text, 편집_방문.get("방문일", ""))
-                            if 건수 > 0:
-                                st.success(f"수정 완료! {건수}건 변경")
-                                st.markdown(요약)
+            # 변경사항 확인 버튼 (항상 표시, 변경 없으면 비활성화)
+            preview_key = f"edit_preview_{편집중_방문id}"
+
+            if st.button(
+                "🔍 변경사항 확인",
+                type="primary",
+                key=f"preview_edit_{편집중_방문id}",
+                disabled=not 변경됨,
+            ):
+                with st.spinner("AI가 변경사항을 분석 중..."):
+                    변경사항 = _변경사항_추출(
+                        환자id, 편집중_방문id, 기존_free_text, 새_free_text,
+                        편집_방문.get("방문일", ""))
+                    st.session_state[preview_key] = 변경사항
+                st.rerun()
+
+            # 변경사항 미리보기 + 확정 저장
+            if st.session_state.get(preview_key):
+                변경사항 = st.session_state[preview_key]
+
+                st.markdown("---")
+                st.markdown("#### 변경사항 확인")
+
+                변경있음 = False
+
+                for 항목 in 변경사항.get("변경", []):
+                    변경있음 = True
+                    기존 = 항목.get("기존", {})
+                    수정후 = 항목.get("수정후", {})
+                    기존값 = 기존.get("결과값", "") or 기존.get("상태", "") or 기존.get("용량", "")
+                    수정값 = 수정후.get("결과값", "") or 수정후.get("상태", "") or 수정후.get("용량", "")
+                    항목명 = 기존.get("검사항목", "") or 기존.get("진단명", "") or 기존.get("약품명", "")
+                    st.markdown(f"✏️ **{항목.get('테이블', '')}** — {항목명}: `{기존값}` → `{수정값}`")
+
+                for 항목 in 변경사항.get("추가", []):
+                    변경있음 = True
+                    데이터 = 항목.get("데이터", {})
+                    대표값 = (데이터.get("검사항목", "") or 데이터.get("진단명", "") or
+                              데이터.get("약품명", "") or 데이터.get("내용", ""))
+                    st.markdown(f"➕ **{항목.get('테이블', '')}** — {대표값} 추가")
+
+                for 항목 in 변경사항.get("삭제", []):
+                    변경있음 = True
+                    데이터 = 항목.get("데이터", {})
+                    대표값 = (데이터.get("검사항목", "") or 데이터.get("진단명", "") or
+                              데이터.get("약품명", "") or 데이터.get("내용", ""))
+                    st.markdown(f"🗑️ **{항목.get('테이블', '')}** — {대표값} 삭제")
+
+                if 변경사항.get("활력징후_변경"):
+                    변경있음 = True
+                    st.markdown(f"✏️ **활력징후** — {변경사항['활력징후_변경']}")
+
+                if 변경사항.get("처방요약_변경"):
+                    변경있음 = True
+                    st.markdown(f"✏️ **처방요약** — {변경사항['처방요약_변경']}")
+
+                if not 변경있음:
+                    st.info("AI가 감지한 데이터 변경사항이 없습니다. free-text만 수정됩니다.")
+
+                st.markdown("---")
+                col_save, col_cancel = st.columns([1, 1])
+                with col_save:
+                    if st.button("✅ 확정 저장", type="primary", key=f"confirm_save_{편집중_방문id}"):
+                        with st.spinner("저장 중..."):
+                            if "예" in 재분석:
+                                결과 = 차트_재분석_저장(
+                                    환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
+                                if 결과:
+                                    st.success("재분석 완료!")
+                                else:
+                                    st.error("재분석 실패")
                             else:
-                                st.info("변경된 데이터가 없습니다.")
-                    st.session_state[f"editing_visit_{환자id}"] = None
-                    st.rerun()
+                                요약, 건수 = 차트_데이터만_수정(
+                                    환자id, 편집중_방문id, 기존_free_text,
+                                    새_free_text, 편집_방문.get("방문일", ""))
+                                if 건수 > 0:
+                                    st.success(f"저장 완료! {건수}건 변경")
+                                else:
+                                    st.success("free-text 수정 저장 완료")
+                        st.session_state[preview_key] = None
+                        st.session_state[f"editing_visit_{환자id}"] = None
+                        st.rerun()
+                with col_cancel:
+                    if st.button("❌ 취소", key=f"cancel_save_{편집중_방문id}"):
+                        st.session_state[preview_key] = None
+                        st.rerun()
 
             st.markdown("---")
 
             # 이 방문 전체 삭제
             with st.expander("⚠️ 이 방문 삭제", expanded=False):
-                st.warning("이 방문과 연결된 모든 데이터(진단, 검사, 처방 등)가 무효화됩니다.")
+                st.warning("이 방문과 연결된 모든 데이터가 무효화됩니다.")
                 삭제사유 = st.text_input("삭제 사유", key=f"del_reason_{편집중_방문id}")
-                if st.button("🗑️ 방문 삭제", type="secondary", key=f"del_visit_{편집중_방문id}"):
+                if st.button("🗑️ 방문 삭제", key=f"del_visit_{편집중_방문id}"):
                     if 삭제사유.strip():
                         방문기록삭제(편집중_방문id, 삭제사유)
                         st.success("삭제 완료")
@@ -1010,15 +1083,14 @@ def _tab_edit(환자id: int):
     # 환자 전체 삭제
     st.markdown("---")
     with st.expander("⚠️ 환자 전체 삭제", expanded=False):
-        st.error("이 환자의 모든 기록(8개 테이블)이 영구 삭제됩니다. 복구할 수 없습니다.")
-        확인입력 = st.text_input("확인하려면 'yes'를 입력하세요", key=f"del_patient_{환자id}")
-        if st.button("🗑️ 환자 삭제", type="secondary", key=f"del_patient_btn_{환자id}"):
+        st.error("이 환자의 모든 기록이 영구 삭제됩니다.")
+        확인입력 = st.text_input("확인하려면 'yes' 입력", key=f"del_patient_{환자id}")
+        if st.button("🗑️ 환자 삭제", key=f"del_patient_btn_{환자id}"):
             if 확인입력.strip() == "yes":
                 환자삭제(환자id)
                 st.success("환자 삭제 완료")
                 st.session_state.selected_patient_id = None
-                st.session_state.page = "홈"
-                st.rerun()
+                _navigate_to("홈")
             else:
                 st.error("'yes'를 정확히 입력하세요.")
 
@@ -1234,66 +1306,124 @@ def _history_by_date(기록: dict):
         with st.expander(f"📅 {날짜 or '날짜 없음'} ({총건수}건)", expanded=(i == 0)):
 
             # 활력징후 + 진료기록
-            for v in 항목들["방문"]:
-                bp_parts = []
-                if v.get("수축기") and v.get("이완기"):
-                    bp_parts.append(f"BP {v['수축기']}/{v['이완기']}")
-                if v.get("심박수"):
-                    bp_parts.append(f"HR {v['심박수']}")
-                if v.get("몸무게") and v.get("키"):
-                    bp_parts.append(f"BMI {v.get('BMI', '')}")
-                if bp_parts:
-                    st.caption("활력징후: " + "  |  ".join(bp_parts))
-                ft = v.get("free_text", "")
-                if ft and ft.strip():
-                    st.markdown("**진료 기록:**")
-                    st.markdown(ft)
-                rx_summary = v.get("처방요약", "")
-                if rx_summary and rx_summary.strip():
-                    st.caption(f"처방요약: {rx_summary}")
+            if 항목들["방문"]:
+                for v in 항목들["방문"]:
+                    bp_parts = []
+                    if v.get("수축기") and v.get("이완기"):
+                        bp_parts.append(f"BP {v['수축기']}/{v['이완기']}")
+                    if v.get("심박수"):
+                        bp_parts.append(f"HR {v['심박수']}")
+                    if v.get("몸무게") and v.get("키"):
+                        bp_parts.append(f"BMI {v.get('BMI', '')}")
+                    if bp_parts:
+                        st.caption("활력징후: " + "  |  ".join(bp_parts))
+
+                    ft = v.get("free_text", "")
+                    if ft and ft.strip():
+                        st.markdown("**진료 기록:**")
+                        st.markdown(ft)
+                    else:
+                        st.markdown("**진료 기록:** 없음")
+
+                    rx_summary = v.get("처방요약", "")
+                    if rx_summary and rx_summary.strip():
+                        st.caption(f"처방요약: {rx_summary}")
+            else:
+                st.caption("활력징후: 없음")
+                st.markdown("**진료 기록:** 없음")
 
             # 진단
+            st.markdown("**진단:**")
             if 항목들["진단"]:
-                st.markdown("**진단:**")
                 for d in 항목들["진단"]:
                     상태표시 = f"({d.get('상태', '')})" if d.get('상태') else ""
                     st.caption(f"  {d.get('진단명', '')} {상태표시}")
+            else:
+                # 이 날짜에 새 진단 없음 → 전체 활성/의심 진단 표시
+                전체진단 = [d for d in 기록.get("진단", [])
+                            if d.get("상태") in ("활성", "의심") and d.get("유효여부", 1) == 1]
+                if 전체진단:
+                    st.caption("  (이전 진단 유지)")
+                    for d in 전체진단:
+                        상태표시 = f"({d.get('상태', '')})" if d.get('상태') else ""
+                        st.caption(f"  {d.get('진단명', '')} {상태표시}")
+                else:
+                    st.caption("  없음")
 
-            # 검사결과
+            # 검사결과 (당일/이전 구분)
+            st.markdown("**검사결과:**")
             if 항목들["검사결과"]:
-                st.markdown("**검사결과:**")
-                cols_사용 = [c for c in ["검사항목", "결과값", "단위", "참고범위"] if c in 항목들["검사결과"][0]]
-                if cols_사용:
-                    df = pd.DataFrame(항목들["검사결과"])[cols_사용]
+                현재날짜 = 날짜
+                당일검사 = []
+                이전검사 = {}
+                for lr in 항목들["검사결과"]:
+                    시행일 = _날짜_정규화(lr.get("검사시행일", ""))
+                    if 시행일 == 현재날짜:
+                        당일검사.append(lr)
+                    else:
+                        이전검사.setdefault(시행일, []).append(lr)
+                if 당일검사:
+                    st.markdown("*당일:*")
+                    available = [c for c in ["검사항목", "결과값", "단위", "참고범위"] if c in 당일검사[0]]
+                    df = pd.DataFrame(당일검사)[available]
                     st.dataframe(df, use_container_width=True, hide_index=True,
                                  height=min(len(df) * 40 + 38, 200))
+                for 시행일 in sorted(이전검사.keys(), reverse=True):
+                    검사들 = 이전검사[시행일]
+                    st.markdown(f"*이전 (시행일: {시행일}):*")
+                    available = [c for c in ["검사항목", "결과값", "단위", "참고범위"] if c in 검사들[0]]
+                    df = pd.DataFrame(검사들)[available]
+                    st.dataframe(df, use_container_width=True, hide_index=True,
+                                 height=min(len(df) * 40 + 38, 200))
+            else:
+                st.caption("  없음")
 
-            # 영상검사
+            # 영상검사 (당일/이전 구분)
+            st.markdown("**영상검사:**")
             if 항목들["영상검사"]:
-                st.markdown("**영상검사:**")
+                현재날짜 = 날짜
+                당일영상 = []
+                이전영상 = {}
                 for img in 항목들["영상검사"]:
-                    st.caption(f"  {img.get('검사종류', '')} — {img.get('결과요약', '')}")
+                    시행일 = _날짜_정규화(img.get("검사시행일", ""))
+                    if 시행일 == 현재날짜:
+                        당일영상.append(img)
+                    else:
+                        이전영상.setdefault(시행일, []).append(img)
+                if 당일영상:
+                    st.markdown("*당일:*")
+                    for img in 당일영상:
+                        st.caption(f"  {img.get('검사종류', '')} — {img.get('결과요약', '')}")
+                for 시행일 in sorted(이전영상.keys(), reverse=True):
+                    st.markdown(f"*이전 (시행일: {시행일}):*")
+                    for img in 이전영상[시행일]:
+                        st.caption(f"  {img.get('검사종류', '')} — {img.get('결과요약', '')}")
+            else:
+                st.caption("  없음")
 
             # 처방
+            st.markdown("**처방:**")
             if 항목들["처방"]:
-                st.markdown("**처방:**")
-                cols_사용 = [c for c in ["약품명", "성분명", "용량", "용법", "일수"] if c in 항목들["처방"][0]]
-                if cols_사용:
-                    df = pd.DataFrame(항목들["처방"])[cols_사용]
-                    st.dataframe(df, use_container_width=True, hide_index=True,
-                                 height=min(len(df) * 40 + 38, 200))
+                available = [c for c in ["약품명", "성분명", "용량", "용법", "일수"] if c in 항목들["처방"][0]]
+                df = pd.DataFrame(항목들["처방"])[available]
+                st.dataframe(df, use_container_width=True, hide_index=True,
+                             height=min(len(df) * 40 + 38, 200))
+            else:
+                st.caption("  없음")
 
             # 검사처방
+            st.markdown("**검사처방:**")
             if 항목들["검사처방"]:
-                st.markdown("**검사처방:**")
                 for o in 항목들["검사처방"]:
                     시행 = "✅" if o.get("시행여부") else "⬜"
                     처방일 = _날짜_정규화(o.get("처방일", ""))
                     st.caption(f"  {시행} {o.get('검사명', '')} (처방일: {처방일})")
+            else:
+                st.caption("  없음")
 
             # 추적계획 (기존 추적계획 + 미래 검사처방 혼합)
+            st.markdown("**추적계획:**")
             if 항목들["추적계획"]:
-                st.markdown("**추적계획:**")
                 for t in 항목들["추적계획"]:
                     if t.get("_미래검사"):
                         시행 = "✅" if t.get("시행여부") else "⬜"
@@ -1303,6 +1433,8 @@ def _history_by_date(기록: dict):
                         완료 = "✅" if t.get("완료여부") else "⬜"
                         예정일 = _날짜_정규화(t.get("예정일", ""))
                         st.caption(f"  {완료} {t.get('내용', '')} (예정: {예정일})")
+            else:
+                st.caption("  없음")
 
 
 # ============================================================
