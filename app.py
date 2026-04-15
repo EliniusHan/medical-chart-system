@@ -1528,7 +1528,7 @@ def _show_visit_record(방문: dict):
     st.markdown("---")
 
     free_text = 방문.get("free_text", "") or "(기록 없음)"
-    st.markdown(free_text)
+    st.text(free_text)
 
     처방요약 = 방문.get("처방요약", "")
     if 처방요약:
@@ -1746,7 +1746,7 @@ def _history_by_date(기록: dict):
                             st.markdown("**진료 기록:**")
                         with cp_col:
                             _copy_button(ft, f"ft_{날짜}_{i}")
-                        st.markdown(ft)
+                        st.text(ft)
                     else:
                         st.markdown("**진료 기록:** 없음")
 

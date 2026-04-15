@@ -173,12 +173,32 @@ SYSTEM_PROMPT = """당신은 내과 전문의의 진료 어시스턴트입니다
 2. 생활습관 (lifestyle): 흡연, 음주, 운동
 3. 진단 (diagnoses): 진단명, 상태(활성/의심/종결), 비고, 표준코드(KCD/ICD), 구분
 4. 검사결과 (lab_results): 검사시행일, 검사항목, 결과값, 단위, 참고범위, 구분
+   ⚠ 결과 수치가 명시된 경우만! 수치 없으면 lab_results 금지 → test_orders로.
 5. 영상검사 (imaging): 검사시행일, 검사종류, 결과요약, 주요수치, 구분
+   ⚠ 결과 소견이 명시된 경우만! 소견 없으면 imaging 금지 → test_orders로.
 6. 추적계획 (tracking): 예정일(YYMM00), 내용, 구분
 7. 처방요약 (prescription_summary): 처방 내용 한 줄 요약
 8. 처방 (prescriptions): 개별 약품 단위 (약품명, 성분명, 용량, 용법, 일수, 구분)
-9. 검사처방 (test_orders): 예정 검사 (검사명, 처방일, 구분)
+9. 검사처방 (test_orders): 시행했거나 시행 예정이지만 결과가 없는 검사 전부 (검사명, 처방일, 구분)
 10. 환자정보 업데이트 (patient_info): 가족력, 약부작용이력 각각 {변경유형, 기존값, 새값, 근거}
+
+=== 검사 분류 규칙 (최우선 적용) ===
+
+[lab_results vs test_orders]
+  판단 기준: 결과 수치가 차트에 적혀 있는가?
+  - 수치 있음 (예: "HbA1c 9.5", "LDL 130 mg/dL", "Cr 0.9") → lab_results
+  - 수치 없음 (예: "Lab 시행", "**Lab(A1c, Lipid)", "혈액검사 시행") → test_orders
+  - "시행" / "처방" / "예정" / "확인" 단어가 있고 결과 수치가 없으면 → 반드시 test_orders
+
+[imaging vs test_orders]
+  - 결과 소견 있음 (예: "CXR: 정상 소견", "경동맥 초음파: IMT 1.1mm") → imaging
+  - 시행 기록만 있고 소견 없음 (예: "CXR 시행", "EKG 시행", "**CXR") → test_orders
+
+[Lab() 표기법 해석]
+  "Lab(A1c, Lipid)" 또는 "**Lab(A1c, Lipid)" 의 의미:
+  → 기본 Lab 패널(CBC, LFT, BUN/Cr, 전해질) + 괄호 안 항목(A1c, Lipid)을 함께 시행.
+  → test_orders 하나로 통합: 검사명 = "Lab (CBC, LFT, BUN/Cr, 전해질, A1c, Lipid)"
+  → 개별 항목으로 쪼개지 말 것.
 """ + _EXTRACTION_RULES + """
 
 === [B] AI 검토 의견 (suggestions) ===
@@ -237,11 +257,22 @@ SYSTEM_PROMPT = """당신은 내과 전문의의 진료 어시스턴트입니다
     "vitals": {"수축기": 152, "이완기": 96, "심박수": 78, "키": 170, "몸무게": 78, "BMI": 27.0},
     "lifestyle": {"흡연": "하루 반 갑(10년)", "음주": "주 2회 소주 1병", "운동": "안 함"},
     "diagnoses": [{"진단명": "고혈압", "상태": "활성", "비고": "", "표준코드": "I10", "구분": "신규"}],
-    "lab_results": [{"검사항목": "FBS", "결과값": "118", "단위": "mg/dL", "참고범위": "70-100", "검사시행일": "260300", "구분": "신규"}],
-    "imaging": [{"검사시행일": "260415", "검사종류": "경동맥초음파", "결과요약": "Rt. IMT 1.1mm", "주요수치": "IMT 1.1mm", "구분": "신규"}],
+    "lab_results": [
+      // 결과 수치가 명시된 검사만! 수치 없으면 여기 넣지 말 것.
+      {"검사항목": "FBS", "결과값": "118", "단위": "mg/dL", "참고범위": "70-100", "검사시행일": "260300", "구분": "신규"}
+    ],
+    "imaging": [
+      // 결과 소견이 명시된 영상검사만! 소견 없으면 여기 넣지 말 것.
+      {"검사시행일": "260415", "검사종류": "경동맥초음파", "결과요약": "Rt. IMT 1.1mm", "주요수치": "IMT 1.1mm", "구분": "신규"}
+    ],
     "prescriptions": [{"약품명": "amlodipine", "성분명": "", "용량": "5mg", "용법": "qd", "일수": 60, "구분": "신규"}],
     "tracking": [{"예정일": "260500", "내용": "Lab(Lipid, LFT, FBS, A1c)", "구분": "신규"}],
-    "test_orders": [{"검사명": "Lab(Lipid, LFT, FBS, A1c)", "처방일": "260500", "구분": "신규"}],
+    "test_orders": [
+      // 시행했거나 시행 예정이지만 결과가 없는 검사 전부. CXR/EKG 시행도 여기.
+      {"검사명": "Lab (CBC, LFT, BUN/Cr, 전해질, Lipid, FBS, A1c)", "처방일": "260300", "구분": "신규"},
+      {"검사명": "CXR", "처방일": "260300", "구분": "신규"},
+      {"검사명": "EKG", "처방일": "260300", "구분": "신규"}
+    ],
     "prescription_summary": "amlodipine 5mg qd + rosuvastatin 10mg qd 시작, 2개월치",
     "patient_info": {
       "가족력": {"변경유형": "add", "기존값": "", "새값": "고혈압(부친)", "근거": "환자 보고"},
@@ -272,12 +303,20 @@ REEXTRACT_SYSTEM = """당신은 의료 데이터 추출 어시스턴트입니다
 2. 생활습관 (lifestyle): 흡연, 음주, 운동
 3. 진단 (diagnoses): 진단명, 상태(활성/의심/종결), 비고, 표준코드, 구분
 4. 검사결과 (lab_results): 검사시행일, 검사항목, 결과값, 단위, 참고범위, 구분
+   ⚠ 결과 수치가 명시된 경우만! 수치 없으면 test_orders로.
 5. 영상검사 (imaging): 검사시행일, 검사종류, 결과요약, 주요수치, 구분
+   ⚠ 결과 소견이 명시된 경우만! 소견 없으면 test_orders로.
 6. 추적계획 (tracking): 예정일(YYMM00), 내용, 구분
 7. 처방요약 (prescription_summary): 처방 내용 한 줄 요약
 8. 처방 (prescriptions): 약품명, 성분명, 용량, 용법, 일수, 구분
-9. 검사처방 (test_orders): 검사명, 처방일, 구분
+9. 검사처방 (test_orders): 시행했거나 시행 예정이지만 결과가 없는 검사 전부 (검사명, 처방일, 구분)
 10. 환자정보 업데이트 (patient_info): 가족력, 약부작용이력
+
+=== 검사 분류 규칙 (최우선 적용) ===
+
+  결과 수치 있음 → lab_results / 수치 없음 → test_orders
+  결과 소견 있음 → imaging / 소견 없음 → test_orders
+  "Lab(A1c, Lipid)" → test_orders 하나로: "Lab (CBC, LFT, BUN/Cr, 전해질, A1c, Lipid)"
 """ + _EXTRACTION_RULES + """
 
 JSON 형식 — extraction 키 하나만 포함:
@@ -829,10 +868,24 @@ def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
         print(f"  → 추적계획 저장: {t.get('내용', '')}")
 
     # --- 검사처방 ---
+    # 처방일 fallback: AI가 처방일을 비워둔 경우 방문일로 대체
+    _방문일_fallback = ""
+    if approved_data.get("test_orders"):
+        _conn = sqlite3.connect(DB경로)
+        try:
+            row = _conn.execute(
+                "SELECT 방문일 FROM 방문 WHERE 방문id=? AND 유효여부=1", (방문id,)
+            ).fetchone()
+            if row:
+                _방문일_fallback = row[0]
+        finally:
+            _conn.close()
+
     for o in approved_data.get("test_orders", []):
-        검사처방추가(환자id, 방문id, o.get("검사명", ""), o.get("처방일", ""))
+        처방일 = o.get("처방일", "") or _방문일_fallback
+        검사처방추가(환자id, 방문id, o.get("검사명", ""), 처방일)
         저장건수 += 1
-        print(f"  → 검사처방 저장: {o.get('검사명', '')} (예정: {o.get('처방일', '')})")
+        print(f"  → 검사처방 저장: {o.get('검사명', '')} (예정: {처방일})")
 
     # --- 환자정보 업데이트 ---
     기존환자 = 환자전체기록조회(환자id)
