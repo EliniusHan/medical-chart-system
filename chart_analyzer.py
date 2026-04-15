@@ -2,9 +2,12 @@
 # 흐름: AI분석(1st API) → 제안승인 → free-text 업데이트 → 의사수정 → 테이블저장(2nd API 선택)
 import os
 import json
+import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+DB경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 from util import (
     환자전체기록조회, 나이계산,
     방문기록_일괄수정,
@@ -800,13 +803,16 @@ def 분석결과_저장(환자id, 방문id, final_free_text, approved_data):
 
     # --- 검사결과 ---
     for k in approved_data.get("lab_results", []):
-        검사결과추가(환자id, k.get("검사시행일", ""), k["검사항목"], k.get("결과값", ""), k.get("단위", ""), k.get("참고범위", ""))
+        검사결과추가(환자id, k.get("검사시행일", ""), k["검사항목"], k.get("결과값", ""),
+                   k.get("단위", ""), k.get("참고범위", ""), 방문id=방문id)
+        _검사처방_시행완료_매칭(환자id, k.get("검사시행일", ""), k["검사항목"])
         저장건수 += 1
         print(f"  → 검사결과 저장: {k['검사항목']} {k.get('결과값', '')}")
 
     # --- 영상검사 ---
     for e in approved_data.get("imaging", []):
-        영상검사추가(환자id, e.get("검사시행일", ""), e["검사종류"], e.get("결과요약", ""), e.get("주요수치", ""))
+        영상검사추가(환자id, e.get("검사시행일", ""), e["검사종류"], e.get("결과요약", ""),
+                   e.get("주요수치", ""), 방문id=방문id)
         저장건수 += 1
         print(f"  → 영상검사 저장: {e['검사종류']}")
 
@@ -902,3 +908,312 @@ def 차트분석_저장_전체흐름(환자id, 방문id, free_text, 방문일=No
     print(f"\n 총 {저장건수}건 저장 완료.")
 
     return final_free_text, 저장건수
+
+
+# ============================================================
+# 헬퍼: 검사처방 시행완료 자동 매칭
+# ============================================================
+def _검사처방_시행완료_매칭(환자id, 검사시행일, 검사항목):
+    """검사결과 저장 시 매칭되는 미시행 검사처방을 시행여부=1로 업데이트."""
+    conn = sqlite3.connect(DB경로)
+    try:
+        미시행 = conn.execute(
+            "SELECT 처방검사id, 검사명 FROM 검사처방 "
+            "WHERE 환자id=? AND 시행여부=0 AND 유효여부=1",
+            (환자id,)
+        ).fetchall()
+        for row in 미시행:
+            처방검사id, 검사명 = row[0], row[1]
+            if 검사항목 in 검사명 or 검사명 in 검사항목:
+                conn.execute(
+                    "UPDATE 검사처방 SET 시행여부=1 WHERE 처방검사id=?",
+                    (처방검사id,)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 차트 수정 함수 (기존 차트분석_저장_전체흐름()과 별개)
+# ============================================================
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일):
+    """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
+    AI 제안/검토 의견 없음. 데이터 변경분만 처리.
+    Returns: (변경사항_요약, 변경건수)"""
+
+    시스템_프롬프트 = """당신은 의료 차트 데이터 비교 어시스턴트입니다.
+수정 전후의 free-text를 비교하여 변경된 의료 데이터만 추출하세요.
+
+새로운 제안이나 검토 의견은 절대 하지 마세요.
+변경/추가/삭제된 데이터만 JSON으로 출력하세요.
+
+JSON 형식:
+{
+  "변경": [
+    {"테이블": "검사결과", "기존": {"검사항목": "HbA1c", "결과값": "9.5"}, "수정후": {"검사항목": "HbA1c", "결과값": "8.5"}, "검사시행일": "260301"}
+  ],
+  "추가": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "TG", "결과값": "150", "단위": "mg/dL", "검사시행일": "260301"}}
+  ],
+  "삭제": [
+    {"테이블": "검사결과", "데이터": {"검사항목": "LDL", "결과값": "160", "검사시행일": "260301"}}
+  ],
+  "활력징후_변경": {"수축기": 140, "이완기": 88},
+  "처방요약_변경": "변경된 처방요약"
+}
+
+변경이 없는 항목은 빈 배열로.
+활력징후_변경, 처방요약_변경은 변경 없으면 null로.
+순수 JSON만 출력. 마크다운이나 설명 없이."""
+
+    프롬프트 = f"""[방문일: {방문일}]
+
+[수정 전 free-text]
+{기존_free_text}
+
+[수정 후 free-text]
+{새_free_text}
+
+위 두 텍스트를 비교하여 변경된 의료 데이터만 추출하세요."""
+
+    # 익명화 처리
+    기록 = 환자전체기록조회(환자id)
+    if 기록:
+        익명기록, 매핑 = api_익명화(기록)
+        # 이름 매핑 추출 (PT_ 접두사 키 → 실제이름)
+        랜덤id = next((k for k in 매핑 if k.startswith("PT_")), None)
+        실제이름 = 매핑.get(랜덤id) if 랜덤id else None
+        익명_기존 = 기존_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 기존_free_text
+        익명_새 = 새_free_text.replace(실제이름, 랜덤id) if (실제이름 and 랜덤id) else 새_free_text
+        익명_프롬프트 = 프롬프트.replace(기존_free_text, 익명_기존).replace(새_free_text, 익명_새)
+    else:
+        매핑 = {}
+        익명_프롬프트 = 프롬프트
+
+    # API 호출
+    응답 = _익명화_api호출(시스템_프롬프트, 익명_프롬프트, 매핑)
+    매핑 = None  # 매핑 메모리 해제
+
+    if not 응답:
+        return "AI 응답 실패", 0
+
+    변경사항 = _parse_json_response(응답)
+    if not 변경사항:
+        return "변경사항 파싱 실패", 0
+
+    변경건수 = 0
+    변경요약 = []
+    conn = sqlite3.connect(DB경로)
+
+    try:
+        # free-text 자체 업데이트
+        방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+        # 활력징후 변경
+        vs = 변경사항.get("활력징후_변경")
+        if vs:
+            필드 = {k: vs[k] for k in ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"] if vs.get(k) is not None}
+            if 필드:
+                방문기록_일괄수정(방문id, 필드)
+                변경건수 += 1
+                변경요약.append(f"활력징후 수정: {필드}")
+
+        # 처방요약 변경
+        if 변경사항.get("처방요약_변경"):
+            방문기록_일괄수정(방문id, {"처방요약": 변경사항["처방요약_변경"]})
+            변경건수 += 1
+            변경요약.append("처방요약 수정")
+
+        # 변경된 항목 처리 (기존 무효화 + 새 레코드)
+        for 항목 in 변경사항.get("변경", []):
+            테이블 = 항목.get("테이블", "")
+            기존 = 항목.get("기존", {})
+            수정후 = 항목.get("수정후", {})
+            시행일 = 항목.get("검사시행일", 방문일)
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 기존.get("검사항목"), 기존.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text 수정' WHERE 검사id=?", (r[0],))
+                conn.commit()
+                검사결과추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사항목", 기존.get("검사항목")),
+                           수정후.get("결과값", ""), 수정후.get("단위", ""), 수정후.get("참고범위", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"검사결과 수정: {기존.get('검사항목')} {기존.get('결과값')} → {수정후.get('결과값')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text 수정' WHERE 진단id=?", (r[0],))
+                conn.commit()
+                진단추가(환자id, 방문id, 수정후.get("진단명", 기존.get("진단명")),
+                        수정후.get("상태", "활성"), 수정후.get("비고", ""), 수정후.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 수정: {기존.get('진단명')} → {수정후.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 기존.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text 수정' WHERE 처방id=?", (r[0],))
+                conn.commit()
+                처방추가(환자id, 방문id, 수정후.get("약품명", 기존.get("약품명")),
+                        수정후.get("성분명", ""), 수정후.get("용량", ""),
+                        수정후.get("용법", ""), 수정후.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 수정: {기존.get('약품명')} → {수정후.get('약품명')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 기존.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text 수정' WHERE 영상id=?", (r[0],))
+                conn.commit()
+                영상검사추가(환자id, 수정후.get("검사시행일", 시행일),
+                           수정후.get("검사종류", 기존.get("검사종류")),
+                           수정후.get("결과요약", ""), 수정후.get("주요수치", ""),
+                           방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 수정: {기존.get('검사종류')}")
+
+        # 추가된 항목 처리
+        for 항목 in 변경사항.get("추가", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                검사결과추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사항목"), 데이터.get("결과값", ""),
+                           데이터.get("단위", ""), 데이터.get("참고범위", ""),
+                           방문id=방문id)
+                _검사처방_시행완료_매칭(환자id, 데이터.get("검사시행일", 방문일), 데이터.get("검사항목", ""))
+                변경건수 += 1
+                변경요약.append(f"검사결과 추가: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                영상검사추가(환자id, 데이터.get("검사시행일", 방문일),
+                           데이터.get("검사종류"), 데이터.get("결과요약", ""),
+                           데이터.get("주요수치", ""), 방문id=방문id)
+                변경건수 += 1
+                변경요약.append(f"영상검사 추가: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                진단추가(환자id, 방문id, 데이터.get("진단명"), 데이터.get("상태", "활성"),
+                        데이터.get("비고", ""), 데이터.get("표준코드", None))
+                변경건수 += 1
+                변경요약.append(f"진단 추가: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                처방추가(환자id, 방문id, 데이터.get("약품명"), 데이터.get("성분명", ""),
+                        데이터.get("용량", ""), 데이터.get("용법", ""), 데이터.get("일수", 0))
+                변경건수 += 1
+                변경요약.append(f"처방 추가: {데이터.get('약품명')}")
+
+            elif 테이블 == "추적계획":
+                추적계획추가(환자id, 방문id, 데이터.get("예정일", ""), 데이터.get("내용", ""))
+                변경건수 += 1
+                변경요약.append(f"추적계획 추가: {데이터.get('내용')}")
+
+            elif 테이블 == "검사처방":
+                검사처방추가(환자id, 방문id, 데이터.get("검사명", ""), 데이터.get("처방일", ""))
+                변경건수 += 1
+                변경요약.append(f"검사처방 추가: {데이터.get('검사명')}")
+
+        # 삭제된 항목 처리 (무효화)
+        for 항목 in 변경사항.get("삭제", []):
+            테이블 = 항목.get("테이블", "")
+            데이터 = 항목.get("데이터", {})
+
+            if 테이블 == "검사결과":
+                rows = conn.execute(
+                    "SELECT 검사id FROM 검사결과 WHERE 환자id=? AND 검사항목=? AND 결과값=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사항목"), 데이터.get("결과값"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 검사id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"검사결과 삭제: {데이터.get('검사항목')} {데이터.get('결과값')}")
+
+            elif 테이블 == "영상검사":
+                rows = conn.execute(
+                    "SELECT 영상id FROM 영상검사 WHERE 환자id=? AND 검사종류=? AND 유효여부=1",
+                    (환자id, 데이터.get("검사종류"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 영상id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"영상검사 삭제: {데이터.get('검사종류')}")
+
+            elif 테이블 == "진단":
+                rows = conn.execute(
+                    "SELECT 진단id FROM 진단 WHERE 환자id=? AND 방문id=? AND 진단명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("진단명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 진단id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"진단 삭제: {데이터.get('진단명')}")
+
+            elif 테이블 == "처방":
+                rows = conn.execute(
+                    "SELECT 처방id FROM 처방 WHERE 환자id=? AND 방문id=? AND 약품명=? AND 유효여부=1",
+                    (환자id, 방문id, 데이터.get("약품명"))
+                ).fetchall()
+                for r in rows:
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 처방id=?", (r[0],))
+                    변경건수 += 1
+                변경요약.append(f"처방 삭제: {데이터.get('약품명')}")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return f"업데이트 오류: {e}", 0
+    finally:
+        conn.close()
+
+    요약텍스트 = "\n".join(변경요약) if 변경요약 else "변경사항 없음"
+    return 요약텍스트, 변경건수
+
+
+def 차트_재분석_저장(환자id, 방문id, 새_free_text, 방문일):
+    """free-text 수정 후 AI 재분석. 이 방문의 기존 데이터 전부 무효화 후 재추출/저장.
+    Returns: (final_free_text, 저장건수) — 차트분석_저장_전체흐름()과 동일 형식"""
+
+    # 이 방문에 연결된 기존 데이터 전부 무효화
+    conn = sqlite3.connect(DB경로)
+    try:
+        for 테이블 in ["진단", "추적계획", "처방", "검사처방"]:
+            conn.execute(
+                f"UPDATE {테이블} SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+                (방문id,)
+            )
+        conn.execute(
+            "UPDATE 검사결과 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.execute(
+            "UPDATE 영상검사 SET 유효여부=0, 정정사유='재분석에 의한 무효화' WHERE 방문id=? AND 유효여부=1",
+            (방문id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # free-text 업데이트
+    방문기록_일괄수정(방문id, {"free_text": 새_free_text})
+
+    # 기존 전체흐름 재활용
+    return 차트분석_저장_전체흐름(환자id, 방문id, 새_free_text, 방문일)

@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from util import (
+    DB연결,
     미분석차트조회,
     나이계산,
     환자검색,
@@ -18,9 +19,13 @@ from util import (
     환자목록가져오기,
     환자전체기록조회,
     환자정보수정,
+    방문기록삭제,
+    환자삭제,
 )
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
+from briefing_generator import 브리핑생성
+from chart_analyzer import 차트_데이터만_수정, 차트_재분석_저장
 
 DB_경로 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "환자DB.db")
 
@@ -42,16 +47,145 @@ st.set_page_config(
 def _inject_css():
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Gowun+Batang&display=swap');
 
-    /* 전체 글자체 — Inter(영문) + Noto Sans KR(한글) */
+    /* 전체 글자체 — Times New Roman(영문) + Nanum Myeongjo/바탕계열(한글) */
     html, body, [class*="css"], .stApp,
     .stMarkdown, .stMarkdown p, .stMarkdown span,
     .stTextInput input, .stTextArea textarea,
     button, label, .stTabs [data-baseweb="tab"],
     .stDataFrame, .stMetric, .stCaption,
     [data-testid="stSidebar"] * {
-        font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+        font-family: 'Times New Roman', 'Nanum Myeongjo', 'Gowun Batang',
+                     'Batang', 'BatangChe', Georgia, serif !important;
+    }
+
+    /* ── 라이트 테마 기본 ── */
+    .stApp {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+    }
+    section[data-testid="stMain"] {
+        background-color: #ffffff !important;
+    }
+
+    /* 입력 필드 */
+    .stTextInput input,
+    .stTextArea textarea,
+    .stSelectbox select,
+    [data-baseweb="input"] input,
+    [data-baseweb="textarea"] textarea {
+        background-color: #ffffff !important;
+        border: 1px solid #ddd8ce !important;
+        color: #1a1a1a !important;
+        border-radius: 6px !important;
+    }
+    .stTextInput input:focus,
+    .stTextArea textarea:focus,
+    [data-baseweb="input"] input:focus {
+        border-color: #c9a84c !important;
+        box-shadow: 0 0 0 1px #c9a84c !important;
+    }
+    /* 라벨 */
+    .stTextInput label, .stTextArea label,
+    .stSelectbox label, .stNumberInput label,
+    .stDateInput label, .stRadio label {
+        color: #6b6560 !important;
+    }
+    /* expander */
+    .stExpander details {
+        background-color: #faf9f6 !important;
+        border: 1px solid #e8e4dc !important;
+        border-radius: 8px !important;
+    }
+    .stExpander summary {
+        color: #1a1a1a !important;
+    }
+    .stExpander summary svg {
+        fill: #c9a84c !important;
+    }
+    /* 데이터프레임/테이블 */
+    .stDataFrame, [data-testid="stDataFrame"] {
+        background-color: #ffffff !important;
+    }
+    .stDataFrame th {
+        background-color: #f5f2ec !important;
+        color: #6b6560 !important;
+        border-bottom: 1px solid #e8e4dc !important;
+    }
+    .stDataFrame td {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+        border-bottom: 1px solid #e8e4dc !important;
+    }
+    /* 탭 */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: transparent !important;
+        border-bottom: 1px solid #e8e4dc !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #9a9590 !important;
+        background-color: transparent !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #a08530 !important;
+        border-bottom: 2px solid #c9a84c !important;
+    }
+    /* 일반 버튼 — primary */
+    button[kind="primary"] {
+        background-color: #c9a84c !important;
+        border-color: #c9a84c !important;
+        color: #ffffff !important;
+    }
+    button[kind="primary"]:hover {
+        background-color: #a08530 !important;
+        border-color: #a08530 !important;
+    }
+    /* 일반 버튼 — secondary */
+    section[data-testid="stMain"] button[kind="secondary"] {
+        background-color: #ffffff !important;
+        border: 1px solid #ddd8ce !important;
+        color: #1a1a1a !important;
+    }
+    section[data-testid="stMain"] button[kind="secondary"]:hover {
+        background-color: #faf9f6 !important;
+        border-color: #c9a84c !important;
+    }
+    /* selectbox / dropdown */
+    [data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border-color: #ddd8ce !important;
+        color: #1a1a1a !important;
+    }
+    [data-baseweb="popover"] {
+        background-color: #ffffff !important;
+    }
+    [data-baseweb="menu"] {
+        background-color: #ffffff !important;
+    }
+    [data-baseweb="menu"] li {
+        color: #1a1a1a !important;
+    }
+    [data-baseweb="menu"] li:hover {
+        background-color: #faf9f6 !important;
+    }
+    /* radio */
+    .stRadio [data-testid="stMarkdownContainer"] p {
+        color: #1a1a1a !important;
+    }
+    /* caption */
+    .stCaption, .stMarkdown small {
+        color: #9a9590 !important;
+    }
+    /* alert / info box */
+    .stAlert {
+        background-color: #faf9f6 !important;
+        border-color: #e8e4dc !important;
+        color: #1a1a1a !important;
+    }
+    /* 구분선 */
+    hr {
+        border-color: #e8e4dc !important;
     }
 
     /* Streamlit 기본 헤더/푸터/Deploy 버튼 숨기기 */
@@ -67,40 +201,38 @@ def _inject_css():
         max-width: 100% !important;
     }
 
-    /* 사이드바 배경 */
+    /* ── 사이드바 ── */
     section[data-testid="stSidebar"] > div:first-child {
-        background-color: #1e2432;
-        border-right: 1px solid #2d3550;
+        background-color: #f8f7f3 !important;
+        border-right: 1px solid #e8e4dc !important;
         padding-top: 1rem !important;
     }
-    /* 사이드바 텍스트 색상 */
     section[data-testid="stSidebar"] .stMarkdown p,
     section[data-testid="stSidebar"] .stMarkdown span,
     section[data-testid="stSidebar"] label {
-        color: #c5cce8 !important;
+        color: #6b6560 !important;
     }
     section[data-testid="stSidebar"] hr {
-        border-color: #2d3550 !important;
+        border-color: #e8e4dc !important;
         margin: 8px 0;
     }
-    /* 사이드바 버튼 — secondary (기본) */
+    /* 사이드바 버튼 — secondary (기본 환자 목록) */
     section[data-testid="stSidebar"] button[kind="secondary"] {
         background: transparent !important;
         border: 1px solid transparent !important;
-        color: #c5cce8 !important;
+        color: #3a3530 !important;
         transition: background 0.15s;
     }
     section[data-testid="stSidebar"] button[kind="secondary"]:hover {
-        background: #2d3550 !important;
-        border-color: #3d4a70 !important;
+        background: #edeae3 !important;
+        border-color: #ddd8ce !important;
     }
-    /* 사이드바 버튼 — primary (활성/선택) */
+    /* 사이드바 버튼 — primary (선택된 환자) */
     section[data-testid="stSidebar"] button[kind="primary"] {
-        background: #4f6ef7 !important;
-        border-color: #4f6ef7 !important;
-        color: white !important;
+        background: #c9a84c !important;
+        border-color: #c9a84c !important;
+        color: #ffffff !important;
     }
-    /* 사이드바 신환등록(primary) 버튼 텍스트 중앙 정렬 */
     section[data-testid="stSidebar"] button[kind="primary"] p {
         text-align: center !important;
     }
@@ -117,7 +249,7 @@ def _inject_css():
         text-align: left !important;
         justify-content: flex-start !important;
     }
-    /* 헤더 행 / 하단 아이콘 행(HorizontalBlock) 버튼은 중앙 정렬 */
+    /* 헤더/하단 아이콘 행 버튼 중앙 정렬 */
     section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
         justify-content: center !important;
     }
@@ -131,55 +263,44 @@ def _inject_css():
         min-width: 280px !important;
         max-width: 280px !important;
     }
-    /* 사이드바 리사이즈 핸들 숨기기 */
     section[data-testid="stSidebar"] > div[data-testid="stSidebarResizeHandle"] {
         display: none !important;
     }
-    /* 사이드바 접기 버튼 숨기기 */
     button[data-testid="stSidebarCollapseButton"],
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
 
-    /* 요약 카드 */
+    /* ── 요약 카드 ── */
     .stat-card {
-        background: white;
-        border-radius: 12px;
+        background: #ffffff;
+        border-radius: 10px;
         padding: 20px 24px;
-        box-shadow: 0 2px 8px rgba(0,0,0,.07);
-        border-left: 4px solid #4f6ef7;
+        border-left: 4px solid #c9a84c;
+        border: 1px solid #e8e4dc;
+        border-left: 4px solid #c9a84c;
     }
-    .stat-card.warn  { border-left-color: #f59e0b; }
-    .stat-card.danger { border-left-color: #ef4444; }
-    .stat-card .label { font-size: 13px; color: #6b7280; margin-bottom: 4px; }
-    .stat-card .value { font-size: 30px; font-weight: 700; color: #1f2937; }
-    .stat-card .sub   { font-size: 12px; color: #9ca3af; margin-top: 4px; }
+    .stat-card.warn  { border-left-color: #c9a84c; }
+    .stat-card.danger { border-left-color: #c0392b; }
+    .stat-card .label { font-size: 13px; color: #9a9590; margin-bottom: 4px; }
+    .stat-card .value { font-size: 30px; font-weight: 700; color: #1a1a1a; }
+    .stat-card .sub   { font-size: 12px; color: #b0ac9a; margin-top: 4px; }
 
-    /* 환자 헤더 배지 */
+    /* ── 환자 헤더 ── */
     .patient-header {
         display: flex;
         align-items: center;
         gap: 16px;
         padding: 16px;
-        background: #eff2ff;
-        border-radius: 12px;
+        background: #faf9f6;
+        border-radius: 10px;
         margin-bottom: 16px;
-    }
-    .initial-badge {
-        width: 52px; height: 52px;
-        border-radius: 50%;
-        background: #4f6ef7;
-        color: white;
-        display: flex; align-items: center; justify-content: center;
-        font-weight: 700; font-size: 22px;
-        flex-shrink: 0;
-    }
-    .initial-badge.sm {
-        width: 36px; height: 36px;
-        font-size: 15px;
+        border-left: 3px solid #c9a84c;
+        border: 1px solid #e8e4dc;
+        border-left: 3px solid #c9a84c;
     }
 
-    /* 데일리 체크 항목 */
+    /* ── 데일리 체크 항목 ── */
     .daily-item {
         padding: 10px 14px;
         border-radius: 8px;
@@ -188,22 +309,22 @@ def _inject_css():
         line-height: 1.5;
     }
     .daily-item.danger {
-        background: #fef2f2;
-        border-left: 3px solid #ef4444;
-        color: #991b1b;
+        background: #fdf0ee;
+        border-left: 3px solid #c0392b;
+        color: #8b2020;
     }
     .daily-item.warn {
-        background: #fffbeb;
-        border-left: 3px solid #f59e0b;
-        color: #92400e;
+        background: #fdf8ec;
+        border-left: 3px solid #c9a84c;
+        color: #7a5c10;
     }
     .daily-item.info {
-        background: #eff6ff;
-        border-left: 3px solid #3b82f6;
-        color: #1e40af;
+        background: #f0f5fb;
+        border-left: 3px solid #5b8db8;
+        color: #2a5070;
     }
 
-    /* 신환 등록 버튼 중앙 정렬 */
+    /* ── 신환 등록 버튼 중앙 정렬 ── */
     .sidebar-center-btn button {
         justify-content: center !important;
     }
@@ -502,7 +623,7 @@ def _render_home():
         st.markdown(f"""
         <div class="stat-card">
             <div class="label">👥 전체 환자</div>
-            <div class="value">{환자수}<span style="font-size:16px;color:#6b7280;font-weight:400;">명</span></div>
+            <div class="value">{환자수}<span style="font-size:16px;color:#5a5550;font-weight:400;">명</span></div>
         </div>
         """, unsafe_allow_html=True)
     with col2:
@@ -510,7 +631,7 @@ def _render_home():
         st.markdown(f"""
         <div class="stat-card{warn_class}">
             <div class="label">📋 미분석 차트</div>
-            <div class="value">{미분석수}<span style="font-size:16px;color:#6b7280;font-weight:400;">건</span></div>
+            <div class="value">{미분석수}<span style="font-size:16px;color:#5a5550;font-weight:400;">건</span></div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
@@ -518,7 +639,7 @@ def _render_home():
         st.markdown(f"""
         <div class="stat-card{danger_class}">
             <div class="label">⚠️ 추적 지연</div>
-            <div class="value">{지연수}<span style="font-size:16px;color:#6b7280;font-weight:400;">건</span></div>
+            <div class="value">{지연수}<span style="font-size:16px;color:#5a5550;font-weight:400;">건</span></div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -701,12 +822,12 @@ def _render_patient_detail(환자id: int):
         <div class="patient-header" style="padding:12px 16px;margin-bottom:8px;">
             <div style="flex:1;">
                 <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-                    <span style="font-size:18px;font-weight:700;color:#1f2937;">{이름}</span>
-                    <span style="font-size:14px;color:#6b7280;">{병록번호_숫자만}</span>
-                    <span style="font-size:14px;color:#6b7280;">{나이표시}/{성별}</span>
-                    <span style="font-size:14px;color:#6b7280;">{환자.get('생년월일', '')}</span>
+                    <span style="font-size:18px;font-weight:700;color:#1a1a1a;">{이름}</span>
+                    <span style="font-size:14px;color:#9a9590;">{병록번호_숫자만}</span>
+                    <span style="font-size:14px;color:#9a9590;">{나이표시}/{성별}</span>
+                    <span style="font-size:14px;color:#9a9590;">{환자.get('생년월일', '')}</span>
                 </div>
-                <div style="font-size:13px;color:#4f6ef7;margin-top:4px;">{주진단표시}</div>
+                <div style="font-size:13px;color:#a08530;margin-top:4px;">{주진단표시}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -740,15 +861,13 @@ def _render_patient_detail(환자id: int):
 
     with col_left:
         with st.container(height=650, border=False):
-            tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 수정", "🗑️ 삭제"])
+            tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 기록 수정"])
             with tabs[0]:
                 _tab_briefing(환자id)
             with tabs[1]:
                 _tab_chart_entry(환자id)
             with tabs[2]:
                 _tab_edit(환자id)
-            with tabs[3]:
-                _tab_delete(환자id)
 
     with col_right:
         with st.container(height=650, border=False):
@@ -756,7 +875,25 @@ def _render_patient_detail(환자id: int):
 
 
 def _tab_briefing(환자id: int):
-    st.info("🔧 추후 구현 — AI 브리핑 생성\n\n`briefing_generator.브리핑생성(환자id)` 연동 예정")
+    cache_key = f"briefing_{환자id}"
+
+    if st.session_state.get(cache_key):
+        st.markdown(st.session_state[cache_key])
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🔄 다시 생성", key=f"briefing_reload_{환자id}"):
+                st.session_state[cache_key] = None
+                st.rerun()
+    else:
+        st.info("AI 브리핑을 생성하면 환자의 전체 기록을 요약합니다. API 비용이 발생합니다.")
+        if st.button("📋 AI 브리핑 생성", type="primary", key=f"briefing_gen_{환자id}"):
+            with st.spinner("AI가 브리핑을 생성 중입니다..."):
+                결과 = 브리핑생성(환자id)
+            if 결과:
+                st.session_state[cache_key] = 결과
+                st.rerun()
+            else:
+                st.error("브리핑 생성에 실패했습니다. API 키와 네트워크를 확인하세요.")
 
 
 def _tab_chart_entry(환자id: int):
@@ -783,11 +920,107 @@ def _tab_chart_entry(환자id: int):
 
 
 def _tab_edit(환자id: int):
-    st.info("🔧 추후 구현 — 기록 수정\n\n`util.py` 수정 함수들 연동 예정")
+    기록 = 환자전체기록조회(환자id)
+    방문목록 = 기록.get("방문", [])
 
+    if not 방문목록:
+        st.caption("방문 기록이 없습니다.")
+        return
 
-def _tab_delete(환자id: int):
-    st.info("🔧 추후 구현 — 기록 삭제\n\n`util.py` 삭제 함수들 연동 예정")
+    # 방문 선택
+    st.markdown("#### 수정할 방문 선택")
+
+    정렬된_방문 = sorted(방문목록, key=lambda v: str(v.get("방문일", "")), reverse=True)
+
+    for v in 정렬된_방문:
+        방문일 = v.get("방문일", "")
+        ft = (v.get("free_text") or "")[:60]
+        미리보기 = f"{ft}..." if len(v.get("free_text", "") or "") > 60 else ft
+        bp = ""
+        if v.get("수축기") and v.get("이완기"):
+            bp = f" | BP {v['수축기']}/{v['이완기']}"
+
+        if st.button(
+            f"📝 {방문일}{bp}\n{미리보기}",
+            key=f"edit_visit_{v['방문id']}",
+            use_container_width=True,
+        ):
+            st.session_state[f"editing_visit_{환자id}"] = v["방문id"]
+            st.rerun()
+
+    # 선택된 방문 편집
+    편집중_방문id = st.session_state.get(f"editing_visit_{환자id}")
+    if 편집중_방문id:
+        편집_방문 = next((v for v in 방문목록 if v["방문id"] == 편집중_방문id), None)
+        if 편집_방문:
+            st.markdown("---")
+            st.markdown(f"#### {편집_방문.get('방문일', '')} 기록 수정")
+
+            기존_free_text = 편집_방문.get("free_text", "") or ""
+
+            새_free_text = st.text_area(
+                "진료 기록 (free-text)",
+                value=기존_free_text,
+                height=200,
+                key=f"edit_ft_{편집중_방문id}",
+            )
+
+            if 새_free_text != 기존_free_text:
+                st.caption("⚠ 변경사항이 있습니다.")
+
+                재분석 = st.radio(
+                    "AI 재분석 여부",
+                    ["아니오 — 데이터 수정만 (과거 기록 정정용)",
+                     "예 — 전체 재분석 (당일 진료 중 수정용)"],
+                    key=f"reanalyze_{편집중_방문id}",
+                )
+
+                if st.button("💾 저장", type="primary", key=f"save_edit_{편집중_방문id}"):
+                    with st.spinner("변경사항 처리 중..."):
+                        if "예" in 재분석:
+                            제안, 건수 = 차트_재분석_저장(
+                                환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
+                            st.success(f"재분석 완료! {건수}건 저장")
+                        else:
+                            요약, 건수 = 차트_데이터만_수정(
+                                환자id, 편집중_방문id, 기존_free_text, 새_free_text, 편집_방문.get("방문일", ""))
+                            if 건수 > 0:
+                                st.success(f"수정 완료! {건수}건 변경")
+                                st.markdown(요약)
+                            else:
+                                st.info("변경된 데이터가 없습니다.")
+                    st.session_state[f"editing_visit_{환자id}"] = None
+                    st.rerun()
+
+            st.markdown("---")
+
+            # 이 방문 전체 삭제
+            with st.expander("⚠️ 이 방문 삭제", expanded=False):
+                st.warning("이 방문과 연결된 모든 데이터(진단, 검사, 처방 등)가 무효화됩니다.")
+                삭제사유 = st.text_input("삭제 사유", key=f"del_reason_{편집중_방문id}")
+                if st.button("🗑️ 방문 삭제", type="secondary", key=f"del_visit_{편집중_방문id}"):
+                    if 삭제사유.strip():
+                        방문기록삭제(편집중_방문id, 삭제사유)
+                        st.success("삭제 완료")
+                        st.session_state[f"editing_visit_{환자id}"] = None
+                        st.rerun()
+                    else:
+                        st.error("삭제 사유를 입력하세요.")
+
+    # 환자 전체 삭제
+    st.markdown("---")
+    with st.expander("⚠️ 환자 전체 삭제", expanded=False):
+        st.error("이 환자의 모든 기록(8개 테이블)이 영구 삭제됩니다. 복구할 수 없습니다.")
+        확인입력 = st.text_input("확인하려면 'yes'를 입력하세요", key=f"del_patient_{환자id}")
+        if st.button("🗑️ 환자 삭제", type="secondary", key=f"del_patient_btn_{환자id}"):
+            if 확인입력.strip() == "yes":
+                환자삭제(환자id)
+                st.success("환자 삭제 완료")
+                st.session_state.selected_patient_id = None
+                st.session_state.page = "홈"
+                st.rerun()
+            else:
+                st.error("'yes'를 정확히 입력하세요.")
 
 
 @st.dialog("검색 결과")
@@ -1137,6 +1370,8 @@ def _render_settings_page():
 # 메인 진입점
 # ============================================================
 def main():
+    # DB 마이그레이션 (칼럼 추가 등) 자동 실행
+    DB연결().close()
     _init_state()
     _inject_css()
     _render_sidebar()
