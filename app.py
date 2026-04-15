@@ -1709,11 +1709,11 @@ def _history_by_date(기록: dict):
         날짜별.setdefault(날짜, _빈항목())["진단"].append(d)
 
     for lr in 기록.get("검사결과", []):
-        날짜 = _날짜_정규화(lr.get("검사시행일", ""))
+        날짜 = _날짜_정규화(방문일_매핑.get(lr.get("방문id"), lr.get("검사시행일", "")))
         날짜별.setdefault(날짜, _빈항목())["검사결과"].append(lr)
 
     for img in 기록.get("영상검사", []):
-        날짜 = _날짜_정규화(img.get("검사시행일", ""))
+        날짜 = _날짜_정규화(방문일_매핑.get(img.get("방문id"), img.get("검사시행일", "")))
         날짜별.setdefault(날짜, _빈항목())["영상검사"].append(img)
 
     for rx in 기록.get("처방", []):
