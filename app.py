@@ -1340,6 +1340,11 @@ def _tab_edit(환자id: int):
     if 편집중_방문id:
         편집_방문 = next((v for v in 방문목록 if v["방문id"] == 편집중_방문id), None)
         if 편집_방문:
+            if st.button("← 목록으로", key=f"edit_back_list_{환자id}", type="secondary"):
+                st.session_state[f"editing_visit_{환자id}"] = None
+                st.session_state.pop(f"edit_preview_{편집중_방문id}", None)
+                st.rerun()
+
             st.markdown("---")
             st.markdown(f"#### {편집_방문.get('방문일', '')} 기록 수정")
 
