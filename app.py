@@ -1340,13 +1340,15 @@ def _tab_edit(환자id: int):
     if 편집중_방문id:
         편집_방문 = next((v for v in 방문목록 if v["방문id"] == 편집중_방문id), None)
         if 편집_방문:
-            if st.button("← 목록으로", key=f"edit_back_list_{환자id}", type="secondary"):
-                st.session_state[f"editing_visit_{환자id}"] = None
-                st.session_state.pop(f"edit_preview_{편집중_방문id}", None)
-                st.rerun()
-
             st.markdown("---")
-            st.markdown(f"#### {편집_방문.get('방문일', '')} 기록 수정")
+            title_col, back_col = st.columns([4, 1])
+            with title_col:
+                st.markdown(f"#### {편집_방문.get('방문일', '')} 기록 수정")
+            with back_col:
+                if st.button("← 목록으로", key=f"edit_back_list_{환자id}", type="secondary"):
+                    st.session_state[f"editing_visit_{환자id}"] = None
+                    st.session_state.pop(f"edit_preview_{편집중_방문id}", None)
+                    st.rerun()
 
             기존_free_text = 편집_방문.get("free_text", "") or ""
 
@@ -1430,9 +1432,16 @@ def _tab_edit(환자id: int):
                     st.info("AI가 감지한 데이터 변경사항이 없습니다. free-text만 수정됩니다.")
 
                 st.markdown("---")
+                정정사유 = st.text_input(
+                    "정정사유 *",
+                    placeholder="예: 검사수치 오기재, 처방 추가 등",
+                    key=f"edit_reason_{편집중_방문id}",
+                )
+
                 col_save, col_cancel = st.columns([1, 1])
                 with col_save:
-                    if st.button("✅ 확정 저장", type="primary", key=f"confirm_save_{편집중_방문id}"):
+                    if st.button("✅ 확정 저장", type="primary", key=f"confirm_save_{편집중_방문id}",
+                                 disabled=not 정정사유.strip()):
                         with st.spinner("저장 중..."):
                             if "예" in 재분석:
                                 try:
@@ -1448,7 +1457,7 @@ def _tab_edit(환자id: int):
                                 요약, 건수 = 차트_데이터만_수정(
                                     환자id, 편집중_방문id, 기존_free_text,
                                     새_free_text, 편집_방문.get("방문일", ""),
-                                    변경사항=변경사항)
+                                    변경사항=변경사항, 정정사유=정정사유)
                                 if 건수 > 0:
                                     st.success(f"저장 완료! {건수}건 변경")
                                 else:

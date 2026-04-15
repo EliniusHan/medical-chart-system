@@ -1140,7 +1140,7 @@ JSON 형식:
     return 변경사항  # 파싱 실패 시 None, 성공 시 dict
 
 
-def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None):
+def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_text, 방문일, 변경사항=None, 정정사유="free-text 수정"):
     """free-text 수정 시 변경된 데이터만 감지하여 테이블을 업데이트한다.
     AI 제안/검토 의견 없음. 데이터 변경분만 처리.
     변경사항이 이미 있으면 그대로 사용, 없으면 새로 추출.
@@ -1187,7 +1187,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 기존.get("검사항목"), 기존.get("결과값"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text 수정' WHERE 검사id=?", (r[0],))
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유=? WHERE 검사id=?", (정정사유, r[0]))
                 conn.commit()
                 검사결과추가(환자id, 수정후.get("검사시행일", 시행일),
                            수정후.get("검사항목", 기존.get("검사항목")),
@@ -1202,7 +1202,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 방문id, 기존.get("진단명"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text 수정' WHERE 진단id=?", (r[0],))
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유=? WHERE 진단id=?", (정정사유, r[0]))
                 conn.commit()
                 진단추가(환자id, 방문id, 수정후.get("진단명", 기존.get("진단명")),
                         수정후.get("상태", "활성"), 수정후.get("비고", ""), 수정후.get("표준코드", None))
@@ -1215,7 +1215,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 방문id, 기존.get("약품명"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text 수정' WHERE 처방id=?", (r[0],))
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유=? WHERE 처방id=?", (정정사유, r[0]))
                 conn.commit()
                 처방추가(환자id, 방문id, 수정후.get("약품명", 기존.get("약품명")),
                         수정후.get("성분명", ""), 수정후.get("용량", ""),
@@ -1229,7 +1229,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 기존.get("검사종류"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text 수정' WHERE 영상id=?", (r[0],))
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유=? WHERE 영상id=?", (정정사유, r[0]))
                 conn.commit()
                 영상검사추가(환자id, 수정후.get("검사시행일", 시행일),
                            수정후.get("검사종류", 기존.get("검사종류")),
@@ -1292,7 +1292,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 데이터.get("검사항목"), 데이터.get("결과값"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 검사id=?", (r[0],))
+                    conn.execute("UPDATE 검사결과 SET 유효여부=0, 정정사유=? WHERE 검사id=?", (정정사유, r[0]))
                     변경건수 += 1
                 변경요약.append(f"검사결과 삭제: {데이터.get('검사항목')} {데이터.get('결과값')}")
 
@@ -1302,7 +1302,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 데이터.get("검사종류"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 영상id=?", (r[0],))
+                    conn.execute("UPDATE 영상검사 SET 유효여부=0, 정정사유=? WHERE 영상id=?", (정정사유, r[0]))
                     변경건수 += 1
                 변경요약.append(f"영상검사 삭제: {데이터.get('검사종류')}")
 
@@ -1312,7 +1312,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 방문id, 데이터.get("진단명"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 진단id=?", (r[0],))
+                    conn.execute("UPDATE 진단 SET 유효여부=0, 정정사유=? WHERE 진단id=?", (정정사유, r[0]))
                     변경건수 += 1
                 변경요약.append(f"진단 삭제: {데이터.get('진단명')}")
 
@@ -1322,7 +1322,7 @@ def 차트_데이터만_수정(환자id, 방문id, 기존_free_text, 새_free_te
                     (환자id, 방문id, 데이터.get("약품명"))
                 ).fetchall()
                 for r in rows:
-                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유='free-text에서 삭제됨' WHERE 처방id=?", (r[0],))
+                    conn.execute("UPDATE 처방 SET 유효여부=0, 정정사유=? WHERE 처방id=?", (정정사유, r[0]))
                     변경건수 += 1
                 변경요약.append(f"처방 삭제: {데이터.get('약품명')}")
 
