@@ -77,6 +77,39 @@ _검사_참고정보 = {
 
 
 # ============================================
+# 가상 방문 판별
+# (외부 검사 기록용으로 자동 생성된 방문을 식별)
+# ============================================
+
+# SQL WHERE 절에서 쓸 수 있는 가상 방문 판별식
+# NOT (_가상방문_SQL조건) 형태로 제외 가능
+# 주의: 테이블 별칭 사용 시 문자열 치환 필요
+_가상방문_SQL조건 = (
+    "((free_text IS NULL OR free_text = '') "
+    "AND 수축기 IS NULL AND 이완기 IS NULL AND 심박수 IS NULL "
+    "AND 키 IS NULL AND 몸무게 IS NULL AND BMI IS NULL "
+    "AND 분석완료 = 1)"
+)
+
+
+def _가상방문_여부(방문_dict):
+    """방문 레코드가 가상 방문(외부 검사 기록용)인지 판별.
+    Python dict 또는 sqlite3.Row 객체 모두 허용.
+    """
+    if not 방문_dict:
+        return False
+    if 방문_dict.get("free_text"):
+        return False
+    활력_필드 = ["수축기", "이완기", "심박수", "키", "몸무게", "BMI"]
+    for f in 활력_필드:
+        if 방문_dict.get(f) is not None:
+            return False
+    if 방문_dict.get("분석완료") != 1:
+        return False
+    return True
+
+
+# ============================================
 # SQLite 연결 및 테이블 초기화
 # ============================================
 def DB연결():
@@ -584,8 +617,14 @@ def 진단조회_by_진단명(환자id, 진단명):
         conn.close()
 
 
-def 환자전체기록조회(환자id):
-    """환자의 유효한 기록만 조회하여 dict로 반환한다."""
+def 환자전체기록조회(환자id, 외부기록_제외=False):
+    """환자의 유효한 기록만 조회하여 dict로 반환한다.
+
+    외부기록_제외=True:
+      - 가상 방문(외부 검사 기록용) 제외
+      - 가상 방문에 연결된 검사결과/영상검사도 제외
+      - 진료용 AI 호출(브리핑 등) 시 사용
+    """
     conn = DB연결()
     try:
         환자 = conn.execute("SELECT * FROM 환자 WHERE 환자id = ?", (환자id,)).fetchone()
@@ -637,12 +676,24 @@ def 환자전체기록조회(환자id):
             (환자id,)
         ).fetchall()
 
+        # dict 변환
+        방문목록_dict = [dict(행) for 행 in 방문목록]
+        검사목록_dict = [dict(행) for 행 in 검사목록]
+        영상목록_dict = [dict(행) for 행 in 영상목록]
+
+        # 외부 기록 제외 옵션
+        if 외부기록_제외:
+            가상방문_ids = {v["방문id"] for v in 방문목록_dict if _가상방문_여부(v)}
+            방문목록_dict = [v for v in 방문목록_dict if v["방문id"] not in 가상방문_ids]
+            검사목록_dict = [r for r in 검사목록_dict if r.get("방문id") not in 가상방문_ids]
+            영상목록_dict = [r for r in 영상목록_dict if r.get("방문id") not in 가상방문_ids]
+
         return {
             "환자": dict(환자),
-            "방문": [dict(행) for 행 in 방문목록],
+            "방문": 방문목록_dict,
             "진단": [dict(행) for 행 in 진단목록],
-            "검사결과": [dict(행) for 행 in 검사목록],
-            "영상검사": [dict(행) for 행 in 영상목록],
+            "검사결과": 검사목록_dict,
+            "영상검사": 영상목록_dict,
             "추적계획": [dict(행) for 행 in 추적목록],
             "처방": [dict(행) for 행 in 처방목록],
             "검사처방": [dict(행) for 행 in 검사처방목록],

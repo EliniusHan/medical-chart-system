@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from anthropic import Anthropic
-from util import api_재시도
+from util import api_재시도, _가상방문_SQL조건
 
 load_dotenv()
 
@@ -244,13 +244,16 @@ def _DB_요약수집():
         # 최근 3개월 검사결과 이상치 빈도
         # 결과수치 칼럼이 존재하는 경우만 (없으면 건너뜀)
         try:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT 검사항목, 참고범위,
                        COUNT(*) AS 전체,
                        SUM(CASE WHEN 결과수치 IS NOT NULL AND 결과수치 != '' THEN 1 ELSE 0 END) AS 수치있음
                 FROM 검사결과
                 WHERE 유효여부 = 1
                   AND 검사시행일 >= ?
+                  AND (방문id IS NULL OR 방문id NOT IN (
+                      SELECT 방문id FROM 방문 WHERE {_가상방문_SQL조건} AND 유효여부 = 1
+                  ))
                 GROUP BY 검사항목
                 HAVING 수치있음 > 0
                 ORDER BY 전체 DESC
@@ -342,7 +345,7 @@ def _환자별_상세수집():
             진단목록 = [f"{r['진단명']}({r['상태']})" for r in 진단rows]
 
             # 현재 처방 (유효여부=1, 가장 최근 방문의 처방만)
-            처방rows = conn.execute("""
+            처방rows = conn.execute(f"""
                 SELECT DISTINCT p.약품명, p.용량, p.용법
                 FROM 처방 p
                 JOIN 방문 v ON p.방문id = v.방문id
@@ -350,6 +353,7 @@ def _환자별_상세수집():
                   AND v.방문id = (
                       SELECT MAX(방문id) FROM 방문
                       WHERE 환자id = ? AND 유효여부 = 1
+                        AND NOT {_가상방문_SQL조건}
                   )
             """, (환자id, 환자id)).fetchall()
             처방목록 = [f"{r['약품명']} {r['용량']} {r['용법']}" for r in 처방rows]

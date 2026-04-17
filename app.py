@@ -26,6 +26,7 @@ from util import (
     방문기록_일괄수정,
     환자메모_조회,
     환자메모_저장,
+    _가상방문_여부,
 )
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
@@ -1003,18 +1004,29 @@ def _chart_step1(환자id):
             st.error("진료 기록을 입력하세요.")
             return
 
-        실제방문일 = 방문일.strip() or 오늘
+        실제방문일 = (방문일.strip() or 오늘)
+
+        # 방문일 형식 검증 (YYMMDD 6자리 숫자만 허용)
+        if not re.fullmatch(r"\d{6}", 실제방문일):
+            st.error(f"방문일은 YYMMDD 6자리 숫자로 입력하세요 (입력값: '{실제방문일}').")
+            return
+
         st.session_state[f"chart_방문일_{환자id}"] = 실제방문일
         st.session_state[f"chart_free_text_{환자id}"] = free_text.strip()
 
-        방문id = 방문기록추가(환자id, 실제방문일,
-                            수축기=None, 이완기=None, 심박수=None,
-                            키=None, 몸무게=None, BMI=None,
-                            free_text=free_text.strip(), 분석완료=0)
-        if not 방문id:
-            st.error("방문 기록 생성에 실패했습니다.")
-            return
-        st.session_state[f"chart_방문id_{환자id}"] = 방문id
+        # 재시도 대응: 이미 생성된 방문id가 있으면 재사용, free_text만 갱신
+        방문id = st.session_state.get(f"chart_방문id_{환자id}")
+        if 방문id:
+            방문기록_일괄수정(방문id, {"free_text": free_text.strip()})
+        else:
+            방문id = 방문기록추가(환자id, 실제방문일,
+                                수축기=None, 이완기=None, 심박수=None,
+                                키=None, 몸무게=None, BMI=None,
+                                free_text=free_text.strip(), 분석완료=0)
+            if not 방문id:
+                st.error("방문 기록 생성에 실패했습니다.")
+                return
+            st.session_state[f"chart_방문id_{환자id}"] = 방문id
 
         with st.spinner("AI가 차트를 분석 중입니다..."):
             결과 = 차트분석(환자id, free_text.strip(), 실제방문일)
@@ -1024,7 +1036,11 @@ def _chart_step1(환자id):
             st.session_state[f"chart_step_{환자id}"] = 2
             st.rerun()
         else:
-            st.error("AI 분석에 실패했습니다. API 키와 네트워크를 확인하세요.")
+            # AI 실패 시 orphan 방지: 방문을 무효화하고 session_state 비움
+            방문기록삭제(방문id, "AI 분석 실패로 무효화")
+            st.session_state.pop(f"chart_방문id_{환자id}", None)
+            st.error("AI 분석에 실패했습니다. API 키와 네트워크를 확인하세요. "
+                     "다시 시도하면 새 방문 레코드가 생성됩니다.")
 
 
 def _chart_step2(환자id):
@@ -1345,7 +1361,9 @@ def _tab_edit(환자id: int):
     # 방문 선택
     st.markdown("#### 수정할 방문 선택")
 
-    정렬된_방문 = sorted(방문목록, key=lambda v: str(v.get("방문일", "")), reverse=True)
+    # 가상 방문은 수정 불가 대상 — 목록에서 숨김
+    실제_방문 = [v for v in 방문목록 if not _가상방문_여부(v)]
+    정렬된_방문 = sorted(실제_방문, key=lambda v: str(v.get("방문일", "")), reverse=True)
 
     for v in 정렬된_방문:
         방문일 = v.get("방문일", "")
@@ -1367,6 +1385,10 @@ def _tab_edit(환자id: int):
     편집중_방문id = st.session_state.get(f"editing_visit_{환자id}")
     if 편집중_방문id:
         편집_방문 = next((v for v in 방문목록 if v["방문id"] == 편집중_방문id), None)
+        # 가상 방문은 편집 금지 (외부 검사 기록 승격 방지)
+        if 편집_방문 and _가상방문_여부(편집_방문):
+            st.session_state[f"editing_visit_{환자id}"] = None
+            편집_방문 = None
         if 편집_방문:
             st.markdown("---")
             title_col, back_col = st.columns([4, 1])
@@ -1449,14 +1471,16 @@ def _tab_edit(환자id: int):
                     변경있음 = True
                     데이터 = 항목.get("데이터", {})
                     대표값 = (데이터.get("검사항목", "") or 데이터.get("진단명", "") or
-                              데이터.get("약품명", "") or 데이터.get("내용", ""))
+                              데이터.get("약품명", "") or 데이터.get("검사명", "") or
+                              데이터.get("검사종류", "") or 데이터.get("내용", ""))
                     st.markdown(f"➕ **{항목.get('테이블', '')}** — {대표값} 추가")
 
                 for 항목 in 변경사항.get("삭제", []):
                     변경있음 = True
                     데이터 = 항목.get("데이터", {})
                     대표값 = (데이터.get("검사항목", "") or 데이터.get("진단명", "") or
-                              데이터.get("약품명", "") or 데이터.get("내용", ""))
+                              데이터.get("약품명", "") or 데이터.get("검사명", "") or
+                              데이터.get("검사종류", "") or 데이터.get("내용", ""))
                     st.markdown(f"🗑️ **{항목.get('테이블', '')}** — {대표값} 삭제")
 
                 if 변경사항.get("활력징후_변경"):
@@ -1485,7 +1509,9 @@ def _tab_edit(환자id: int):
                             if "예" in 재분석:
                                 try:
                                     결과 = 차트_재분석_저장(
-                                        환자id, 편집중_방문id, 새_free_text, 편집_방문.get("방문일", ""))
+                                        환자id, 편집중_방문id, 새_free_text,
+                                        편집_방문.get("방문일", ""),
+                                        정정사유=정정사유)
                                     if 결과:
                                         st.success("재분석 + 저장 완료!")
                                     else:
@@ -1737,7 +1763,13 @@ def _history_by_date(기록: dict):
 
     날짜별: dict = {}
 
+    # 가상 방문 id 집합 — UI 표시 시 제외 대상
+    가상방문_ids = {v["방문id"] for v in 기록.get("방문", []) if _가상방문_여부(v)}
+
     for v in 기록.get("방문", []):
+        # 가상 방문 자체 버킷 생성 안 함
+        if v["방문id"] in 가상방문_ids:
+            continue
         날짜 = _날짜_정규화(v.get("방문일", ""))
         날짜별.setdefault(날짜, _빈항목())["방문"].append(v)
 
@@ -1746,10 +1778,15 @@ def _history_by_date(기록: dict):
         날짜별.setdefault(날짜, _빈항목())["진단"].append(d)
 
     for lr in 기록.get("검사결과", []):
+        # 가상 방문에 연결된 검사결과(외부 기록)는 UI에서 숨김
+        if lr.get("방문id") in 가상방문_ids:
+            continue
         날짜 = _날짜_정규화(방문일_매핑.get(lr.get("방문id"), lr.get("검사시행일", "")))
         날짜별.setdefault(날짜, _빈항목())["검사결과"].append(lr)
 
     for img in 기록.get("영상검사", []):
+        if img.get("방문id") in 가상방문_ids:
+            continue
         날짜 = _날짜_정규화(방문일_매핑.get(img.get("방문id"), img.get("검사시행일", "")))
         날짜별.setdefault(날짜, _빈항목())["영상검사"].append(img)
 
