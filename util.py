@@ -93,7 +93,8 @@ def DB연결():
             생년월일 TEXT,
             성별 TEXT,
             가족력 TEXT,
-            약부작용이력 TEXT
+            약부작용이력 TEXT,
+            메모 TEXT DEFAULT ''
         )
     """)
 
@@ -114,7 +115,7 @@ def DB연결():
             운동 TEXT,
             free_text TEXT,
             처방요약 TEXT,
-            분석완료 INTEGER DEFAULT 1,
+            분석완료 INTEGER DEFAULT 0,
             유효여부 INTEGER DEFAULT 1,
             정정사유 TEXT,
             FOREIGN KEY (환자id) REFERENCES 환자(환자id)
@@ -226,7 +227,8 @@ def DB연결():
     # 기존 DB에 없는 칼럼 추가 (ALTER TABLE)
     기존_칼럼_추가 = [
         ("환자",    "병록번호",  "TEXT"),
-        ("방문",    "분석완료",  "INTEGER DEFAULT 1"),
+        ("환자",    "메모",      "TEXT DEFAULT ''"),
+        ("방문",    "분석완료",  "INTEGER DEFAULT 0"),
         ("방문",    "유효여부",  "INTEGER DEFAULT 1"),
         ("방문",    "정정사유",  "TEXT"),
         ("진단",    "유효여부",  "INTEGER DEFAULT 1"),
@@ -357,7 +359,7 @@ def 환자등록(이름, 생년월일, 성별, 가족력="", 약부작용이력=
         conn.close()
 
 
-def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연="", 음주="", 운동="", free_text="", 처방요약="", 분석완료=1):
+def 방문기록추가(환자id, 방문일, 수축기, 이완기, 심박수, 키, 몸무게, BMI, 흡연="", 음주="", 운동="", free_text="", 처방요약="", 분석완료=0):
     """방문 기록을 추가하고, 방문id를 반환한다."""
     conn = DB연결()
     try:
@@ -513,7 +515,7 @@ def 방문기록_일괄수정(방문id, 필드dict):
     의사 수동 정정은 기존 방문기록수정() 사용.
     Returns: True/False"""
     허용필드 = {"수축기", "이완기", "심박수", "키", "몸무게", "BMI",
-               "흡연", "음주", "운동", "free_text", "처방요약"}
+               "흡연", "음주", "운동", "free_text", "처방요약", "분석완료"}
     업데이트할 = {k: v for k, v in 필드dict.items() if k in 허용필드 and v is not None}
     if not 업데이트할:
         return False
@@ -781,6 +783,32 @@ def 환자정보수정(환자id, 수정할항목, 새값):
             conn.execute(
                 f"UPDATE 환자 SET {수정할항목} = ? WHERE 환자id = ?",
                 (새값, 환자id)
+            )
+        return True
+    finally:
+        conn.close()
+
+
+def 환자메모_조회(환자id):
+    """환자의 메모를 조회한다."""
+    conn = DB연결()
+    try:
+        row = conn.execute(
+            "SELECT 메모 FROM 환자 WHERE 환자id = ?", (환자id,)
+        ).fetchone()
+        return row[0] if row and row[0] else ""
+    finally:
+        conn.close()
+
+
+def 환자메모_저장(환자id, 메모):
+    """환자의 메모를 저장한다."""
+    conn = DB연결()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE 환자 SET 메모 = ? WHERE 환자id = ?",
+                (메모, 환자id)
             )
         return True
     finally:

@@ -24,6 +24,8 @@ from util import (
     환자삭제,
     방문기록추가,
     방문기록_일괄수정,
+    환자메모_조회,
+    환자메모_저장,
 )
 from practice_analyzer import AI_패턴분석, 데일리_SQL체크
 from backup import DB백업
@@ -838,23 +840,28 @@ def _render_patient_detail(환자id: int):
         가족력_현재  = 환자.get("가족력", "")      or ""
         약부작용_현재 = 환자.get("약부작용이력", "") or ""
 
-        fi_col, fb_col = st.columns([5, 1], vertical_alignment="bottom")
-        with fi_col:
-            가족력_입력 = st.text_input("가족력", value=가족력_현재, key=f"fh_{환자id}")
-        with fb_col:
-            if st.button("저장", key=f"fh_save_{환자id}", use_container_width=True):
-                환자정보수정(환자id, "가족력", 가족력_입력)
-                st.toast("가족력 저장 완료")
-                st.rerun()
+        # 가족력과 약부작용이력을 좌우 병렬 배치
+        fh_col, ae_col = st.columns(2)
 
-        ai_col, ab_col = st.columns([5, 1], vertical_alignment="bottom")
-        with ai_col:
-            약부작용_입력 = st.text_input("약부작용이력", value=약부작용_현재, key=f"ae_{환자id}")
-        with ab_col:
-            if st.button("저장", key=f"ae_save_{환자id}", use_container_width=True):
-                환자정보수정(환자id, "약부작용이력", 약부작용_입력)
-                st.toast("약부작용이력 저장 완료")
-                st.rerun()
+        with fh_col:
+            fi_col, fb_col = st.columns([4, 1], vertical_alignment="bottom")
+            with fi_col:
+                가족력_입력 = st.text_input("가족력", value=가족력_현재, key=f"fh_{환자id}")
+            with fb_col:
+                if st.button("저장", key=f"fh_save_{환자id}", use_container_width=True):
+                    환자정보수정(환자id, "가족력", 가족력_입력)
+                    st.toast("가족력 저장 완료")
+                    st.rerun()
+
+        with ae_col:
+            ai_col, ab_col = st.columns([4, 1], vertical_alignment="bottom")
+            with ai_col:
+                약부작용_입력 = st.text_input("약부작용이력", value=약부작용_현재, key=f"ae_{환자id}")
+            with ab_col:
+                if st.button("저장", key=f"ae_save_{환자id}", use_container_width=True):
+                    환자정보수정(환자id, "약부작용이력", 약부작용_입력)
+                    st.toast("약부작용이력 저장 완료")
+                    st.rerun()
 
     with hdr_right:
         if st.session_state.page_history:
@@ -865,7 +872,7 @@ def _render_patient_detail(환자id: int):
 
     with col_left:
         with st.container(height=650, border=False):
-            tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 기록 수정"])
+            tabs = st.tabs(["📋 브리핑", "📝 진료기록", "✏️ 기록 수정/삭제"])
             with tabs[0]:
                 _tab_briefing(환자id)
             with tabs[1]:
@@ -958,17 +965,39 @@ def _chart_state_초기화(환자id):
 def _chart_step1(환자id):
     """Step 1: 방문일 + free-text 입력 → AI 분석 요청"""
     오늘 = datetime.today().strftime("%y%m%d")
+
     방문일 = st.text_input(
         "방문일 (YYMMDD, 빈칸=오늘)", value="",
         key=f"s1_date_{환자id}",
         placeholder=f"빈칸이면 오늘({오늘})",
     )
-    free_text = st.text_area(
-        "진료 기록 (free-text)", height=200,
-        key=f"s1_ft_{환자id}",
-        placeholder="예) HTN f/u. BP 140/90. amlodipine 5mg qd 복용 중.\nLDL 이전 130으로 높아 rosuvastatin 추가 고려.\n다음 3개월 후 Lab f/u 예정.",
-    )
 
+    # 좌우 분할: 왼쪽 진료기록 70%, 오른쪽 환자 메모 30%
+    chart_col, memo_col = st.columns([7, 3])
+
+    with chart_col:
+        free_text = st.text_area(
+            "진료 기록 (free-text)", height=200,
+            key=f"s1_ft_{환자id}",
+            placeholder="예) HTN f/u. BP 140/90. amlodipine 5mg qd 복용 중.\nLDL 이전 130으로 높아 rosuvastatin 추가 고려.\n다음 3개월 후 Lab f/u 예정.",
+        )
+
+    with memo_col:
+        기존메모 = 환자메모_조회(환자id)
+        새메모 = st.text_area(
+            "환자 메모",
+            value=기존메모,
+            height=200,
+            key=f"s1_memo_{환자id}",
+            placeholder="진료 시 참고할 사항을 자유롭게 기록하세요.\nAI 분석/통계에 반영되지 않으며,\n진료 기록과 독립적으로 관리됩니다.\n예) 환자 요청사항, 특이사항, 사적 메모 등",
+        )
+
+        if st.button("💾 메모 저장", key=f"s1_memo_save_{환자id}", use_container_width=True):
+            환자메모_저장(환자id, 새메모)
+            st.success("메모 저장 완료")
+            st.rerun()
+
+    # AI 분석 요청 버튼은 전체 너비 하단
     if st.button("AI 분석 요청 →", type="primary", key=f"s1_submit_{환자id}"):
         if not free_text.strip():
             st.error("진료 기록을 입력하세요.")
@@ -978,7 +1007,6 @@ def _chart_step1(환자id):
         st.session_state[f"chart_방문일_{환자id}"] = 실제방문일
         st.session_state[f"chart_free_text_{환자id}"] = free_text.strip()
 
-        # 방문 기록 먼저 생성 (분석완료=0, 나중에 저장 후 1로 갱신)
         방문id = 방문기록추가(환자id, 실제방문일,
                             수축기=None, 이완기=None, 심박수=None,
                             키=None, 몸무게=None, BMI=None,
