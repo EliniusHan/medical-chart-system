@@ -1524,14 +1524,23 @@ def _날짜_정규화(날짜str) -> str:
     if not 날짜str:
         return ""
     날짜str = str(날짜str).strip()
+    # YYYY-MM-DD (10자리)
     if len(날짜str) == 10 and "-" in 날짜str:
         return 날짜str
+    # YYYY-MM (7자리)
+    if len(날짜str) == 7 and "-" in 날짜str:
+        return 날짜str
+    # YYMMDD (6자리)
     if len(날짜str) == 6 and 날짜str.isdigit():
         yy, mm, dd = 날짜str[:2], 날짜str[2:4], 날짜str[4:6]
         yyyy = f"20{yy}"
         if dd == "00":
             return f"{yyyy}-{mm}"
         return f"{yyyy}-{mm}-{dd}"
+    # YYMM (4자리)
+    if len(날짜str) == 4 and 날짜str.isdigit():
+        yy, mm = 날짜str[:2], 날짜str[2:4]
+        return f"20{yy}-{mm}"
     return 날짜str
 
 
